@@ -145,14 +145,15 @@ jobs:
 
   # ── host-ABI cross-build ───────────────────────────────────────────────────
   # ┌───────────────────────────────────────────────────────────────────────┐
-  # │ UNVERIFIED — this job has never succeeded anywhere.                   │
+  # │ VERIFIED 2026-08-03, run 30757467197: this job passes.                │
   # │                                                                       │
-  # │ No NDK build of `alr` exists in this repo or in docs/evidence/.  Every │
-  # │ `alr` binary to date came from Termux's own on-device clang, which the │
-  # │ Makefile documents as a dev inner loop and never a release path.  The  │
-  # │ first run of this job IS the experiment.  If it fails, that is a       │
-  # │ finding about the NDK/bionic build, not a regression — record it and   │
-  # │ fix the source, do not delete the job.                                 │
+  # │ It was authored as an experiment — no NDK build of `alr` existed in    │
+  # │ this repo or in docs/evidence/, because every `alr` binary to date     │
+  # │ came from Termux's own on-device clang, which the Makefile documents   │
+  # │ as a dev inner loop and never a release path.  The first run settled   │
+  # │ it: all five sources cross-build and link against bionic, and the      │
+  # │ outputs are aarch64.  That is the ABI claim, not a release: release    │
+  # │ builds come from a pinned NDK, not the runner image's.                 │
   # └───────────────────────────────────────────────────────────────────────┘
   #
   # Two further caveats, stated plainly:
@@ -166,10 +167,10 @@ jobs:
   #    NOT used for alr-doctor because the Makefile adds -Werror, which no build
   #    of doctor.c has ever used — dev-push.sh :128 compiles it as plain
   #    `clang -O1`.  Whether these sources are warning-clean under NDK headers
-  #    is UNVERIFIED; letting a warning kill the run would hide the linkage/ABI
+  #    is not asserted; letting a warning kill the run would hide the linkage/ABI
   #    answer this job exists to get.  Warnings still print.
   cross-build-ndk:
-    name: NDK cross-build (UNVERIFIED)
+    name: NDK cross-build (bionic)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -219,9 +220,9 @@ jobs:
       - name: produced binaries are aarch64
         run: file build/alr build/alr-doctor
 
-      # Named UNVERIFIED so nobody mistakes a CI experiment for a release
-      # binary.  Release builds come from a pinned NDK, not from whatever the
-      # runner image happens to carry.
+      # These are CI artifacts, not release binaries: the NDK here is whatever
+      # the runner image carries, while a release pins it.  scripts/make-release.sh
+      # is the only thing that produces a shippable tarball.
       - name: upload cross-built binaries
         uses: actions/upload-artifact@v4
         with:
