@@ -309,6 +309,28 @@ else
     emit "SPAWN POSIX_SPAWN" SKIP "no libc6-dev (spawn.h absent)"
 fi
 
+# Android's SELinux ioctlcmd filter denies TCGETS2/TIOCGSID/TIOCGETD/TIOCEXCL on
+# a PTY slave; §11 answers them locally.  TIOCSTI must STAY denied -- it is
+# neverallowxperm and pretending otherwise would silently drop injected input.
+# MEASURED: FIONREAD is allowed natively, which falsified §11's premise that it
+# needed emulating through the master fd.
+if $ALR run /usr/bin/test -f /usr/include/spawn.h >/dev/null 2>&1; then
+    cp tests/device/probe_ioctl.c "$R/tmp/" 2>/dev/null
+    if $ALR run /usr/bin/gcc -o /tmp/alrio /tmp/probe_ioctl.c >/dev/null 2>&1; then
+        out=$($ALR run /tmp/alrio 2>&1)
+        bad=$(printf '%s\n' "$out" | awk '/^(TCGETS2|TIOCGSID|TIOCGETD|TIOCEXCL|FIONREAD) / && $2 != "ok"')
+        [ -z "$bad" ] && emit "IOCTL PTY TRANSLATED" PASS \
+                      || emit "IOCTL PTY TRANSLATED" FAIL "$(printf '%s' "$bad" | tr '\n' ';')"
+        printf '%s\n' "$out" | grep -q '^TIOCSTI *Permission denied' \
+            && emit "IOCTL TIOCSTI STAYS DENIED" PASS \
+            || emit "IOCTL TIOCSTI STAYS DENIED" FAIL "TIOCSTI must never succeed"
+    else
+        emit "IOCTL PTY TRANSLATED" FAIL "probe did not compile"
+    fi
+else
+    emit "IOCTL PTY TRANSLATED" SKIP "no libc6-dev (spawn.h absent)"
+fi
+
 echo
 echo "── 호스트 이름 해석 ──"
 # The bridge answers from BIONIC, so it reads Android's /system/etc/hosts --

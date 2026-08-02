@@ -210,9 +210,10 @@ Ubuntu 20.04 / Debian 11(glibc 2.31)에는 `--argv0`이 없어 argv[0]이 호스
 | `initgroups()` | 미구현. `setgroups` 가 seccomp 로 차단되어 보조 그룹 설정 자체가 불가능하다 |
 | 로케일 아카이브 | `LOCPATH` 를 rootfs 로 지정하므로 glibc 가 `locale-archive` 를 건너뛴다. 추가 로케일은 `locale-gen --no-archive` 로 디렉토리 생성해야 한다 (아래 주석) |
 | `/dev/full` | **영구 비목표.** 서빙하려면 프로세스에서 가장 뜨거운 syscall 인 `write()` 를 인터포즈해야 하는데, 대상 워크로드 중 이 디바이스 노드를 쓰는 것이 없다. 게다가 stdio 심볼(`puts`/`putchar`/`fwrite_unlocked`/`dprintf`/…)을 하나라도 빠뜨리면 **성공한 쓰기로 조용히 통과**한다 — 열거 가능하고 요란하게 실패하는 `mkstemp`(9개)·NSS(15개) 계열과 다르다. `KNOWN_FAIL:non-goal-devfull` |
-| §11 `ioctl` 번역 | **미구현**(포기가 아님). PTY ioctl 화이트리스트가 명세되어 있으나 `FIONREAD` 에뮬레이션은 PTY 마스터 fd 를 요구하는데 게스트 쪽이 쥐고 있지 않다. 없을 때 무엇이 깨지는지는 **UNVERIFIED** — readline/ncurses 가 후보다. `src/preload/wrappers.def` 의 not-implemented 절에 기록 |
+| §11 `ioctl` 번역 | **구현됨** ([M14](evidence/2026-08-03-m14-ioctl-php.md)). 실측이 스펙 전제를 반박했다 — `FIONREAD` 는 네이티브로 허용되어 마스터 fd 에뮬레이션이 애초에 불필요했다. `TIOCSTI` 만 의도적으로 계속 거부(`neverallowxperm`) |
+| `php-cli` abort 재발 가능성 | 출하 빌드에서는 동작하나 **원인 미규명**. preload 심볼 테이블 크기에 민감(경계 ~152). 심볼을 덜어내면 재발할 수 있고 범인은 그 변경이 아니다. `breadth.sh` 가 회귀를 잡지만 오귀속 주의 |
+| Ubuntu 26.04 rootfs | **부팅 안 됨** — 멀티콜 coreutils 가 `argv[0]` 로 디스패치하는데 `--argv0` 가 반영되지 않는다. v1 대상은 24.04 뿐이므로 목표 미달은 아니나, 26.04 지원 주장 근거 없음. 원인 UNVERIFIED |
 | `/proc/stat` 시간 필드 | Android 가 `/proc/stat` 을 앱 uid 에 `EACCES` 로 막는다. CPU **개수**는 `sched_getaffinity` 로 진짜 값을 얻어 합성하지만(`nproc`=8 과 일치), **시간 필드는 전부 0** 이다. 델타로 CPU 사용률을 계산하는 도구는 항상 0% 를 본다. `/proc/cpuinfo` 는 읽히므로 건드리지 않는다 |
-| `php-cli` | `*** buffer overflow detected ***` 로 abort. **우리 인터포지션 탓이 아님을 확인** — 빈 preload 로도 동일하게 죽는다. 근본 원인 미확인. `KNOWN_FAIL:php-abort-unattributed` ([M11 §5](evidence/2026-08-02-m11-breadth.md)) |
 
 > **`LOCPATH` 를 왜 쓰는가.** glibc 의 `_nl_find_locale` 은 리터럴 `/usr/lib/locale` 을 내부 호출로 열고, Android 호스트에는 그 디렉토리가 아예 없다. 그래서 게스트는 rootfs 가 `C.utf8` 을 배포하고 있는데도 `C`/`POSIX` 밖에 못 봤고, `tmux` 는 "need UTF-8 locale (LC_CTYPE) but have ANSI_X3.4-1968" 로 거부했다. `LOCPATH` 는 glibc 자신의 탈출구다. 대가는 `locale-archive` 를 못 읽는 것인데, 호스트에 로케일이 전무한 현 상태보다는 확실히 낫다.
 

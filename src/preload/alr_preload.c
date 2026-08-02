@@ -2446,6 +2446,7 @@ int mknod(const char *path, mode_t m, dev_t d)
 }
 int mknodat(int dfd, const char *path, mode_t m, dev_t d)
 { P(path); NEED(mknodat); return real_mknodat(dfd, _p, m, d); }
+#ifndef ALR_NO_M13
 /* ---- the remainder of the docs/04-preload-spec.md §6 tables -------------
  *
  * These were declared mandatory and never implemented.  Nothing flagged it
@@ -2455,6 +2456,7 @@ int mknodat(int dfd, const char *path, mode_t m, dev_t d)
 
 /* §6.5: scandir takes a path.  Missing it meant `ls`-style scans through
  * scandir(3) walked ANDROID's tree. */
+#ifndef ALR_NO_SCANDIR
 int scandir(const char *path, struct dirent ***nl,
             int (*sel)(const struct dirent *),
             int (*cmp)(const struct dirent **, const struct dirent **))
@@ -2466,6 +2468,7 @@ int scandir64(const char *path, struct dirent64 ***nl,
 
 /* §6.3: faccessat2 is the newer syscall-backed form; glibc 2.33+ routes
  * faccessat through it when AT_EACCESS is requested. */
+#endif
 int faccessat2(int dfd, const char *path, int mode, int flags)
 { P(path); NEED(faccessat); return real_faccessat(dfd, _p, mode, flags); }
 
@@ -2491,18 +2494,23 @@ char *__getwd_chk(char *buf, size_t buflen)
       memcpy(buf, tmp, n + 1); }
     return buf;
 }
+#ifndef ALR_NO_GETCWD_CHK
 char *__getcwd_chk(char *buf, size_t size, size_t buflen)
 { if (size > buflen) { errno = ERANGE; return NULL; } return getcwd(buf, size); }
+#endif
 
 /* §6.4/§5.3: the fortified forms.  glibc's own __realpath_chk aborts when the
  * caller's buffer is under PATH_MAX; ours must do the same check and then go
  * through OUR realpath so the result comes back in guest space. */
+#ifndef ALR_NO_REALPATH_CHK
 char *__realpath_chk(const char *path, char *out, size_t outlen)
 { if (outlen < ALR_PBUF) { errno = ERANGE; return NULL; } return realpath(path, out); }
+#endif
 ssize_t __readlinkat_chk(int dfd, const char *path, char *buf,
                          size_t sz, size_t buflen)
 { if (sz > buflen) { errno = EINVAL; return -1; } return readlinkat(dfd, path, buf, sz); }
 
+#ifndef ALR_NO_M13B
 /* §5.3: ttyname returns a PATH, so it must come back canonicalised into guest
  * space or the guest re-prefixes it into nonsense on the next open. */
 char *ttyname(int fd)
@@ -2582,9 +2590,29 @@ int name_to_handle_at(int dfd, const char *path, struct file_handle *h,
 /* §6.13: dlmopen takes the same path argument as dlopen. */
 void *dlmopen(long nsid, const char *path, int flags)
 { PN(path); NEEDN(dlmopen); return real_dlmopen(nsid, _p, flags); }
+#endif /* ALR_NO_M13B */
+#endif /* ALR_NO_M13 */
 
 int mkfifo(const char *path, mode_t m)
 { P(path); NEED(mkfifo); return real_mkfifo(_p, m); }
+
+#ifdef ALR_DEBUG_CHK
+/* Diagnostic build only.  glibc's __chk_fail is what prints
+ * "*** buffer overflow detected ***" and aborts; it is an exported symbol, so
+ * interposing it turns an opaque abort into a backtrace naming the caller.
+ * Used to attribute the php-cli abort (docs/evidence M11 §5 left it
+ * unattributed).  Never in a shipping build -- it changes abort semantics. */
+#include <execinfo.h>
+void __chk_fail(void)
+{
+    void *bt[24];
+    int n = backtrace(bt, 24);
+    const char *m = "\n=== alr: __chk_fail intercepted, backtrace ===\n";
+    ssize_t w = write(2, m, strlen(m)); (void)w;
+    backtrace_symbols_fd(bt, n, 2);
+    _exit(134);
+}
+#endif
 
 /* ---- ioctl translation (docs/04-preload-spec.md §11) --------------------
  *

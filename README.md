@@ -83,8 +83,8 @@ alr version                 # 버전 / preload 경로 / preload sha256 / rootfs 
 ### 호환성 폭
 
 **빌드 툴체인·언어 런타임·CLI 유틸을 아우르는 큐레이션된 96개 Ubuntu noble 패키지에서 무수정 설치 96/96,
-실행 95/96 — 단일 MediaTek 기기 1회 세션**
-([M11](docs/evidence/2026-08-02-m11-breadth.md), [M12](docs/evidence/2026-08-03-m12-spawn-resolver.md)에서 회귀 없음 확인).
+실행 96/96 — 단일 MediaTek 기기 1회 세션**
+([M11](docs/evidence/2026-08-02-m11-breadth.md), [M14](docs/evidence/2026-08-03-m14-ioctl-php.md)).
 
 > **아카이브 전체(수만 개)에 대한 주장이 아니다.** 이건 우리가 고른 96개에 대한 진술이다.
 > 표현은 [docs/00-product.md §3](docs/00-product.md)의 승인된 문장을 그대로 쓴 것이다.
@@ -98,36 +98,39 @@ alr version                 # 버전 / preload 경로 / preload sha256 / rootfs 
 ### 수용 테스트
 
 ```
-PASS=73  FAIL=0  KNOWN_FAIL=1  SKIP=0
+PASS=76  FAIL=0  KNOWN_FAIL=1  SKIP=0
 ```
 
-[M12](docs/evidence/2026-08-03-m12-spawn-resolver.md) 시점 (이전 라운드는 60/0/1).
+[M14](docs/evidence/2026-08-03-m14-ioctl-php.md) 시점 (라운드별로 60 → 73 → 74 → 76).
 매 실행 `path_traps=0 syscall_stops=0` 을 함께 보고한다 — **path syscall에 ptrace를 걸지 않는다는 것이
 PRoot와 갈리는 불변식**이고, 이 줄이 그것을 실행마다 확인해 준다.
 
-> **이 숫자가 뜻하지 않는 것.** `PASS=73` 은 제품이 아니라 **그 시점에 존재하던 테스트**에 대한 진술이다.
+> **이 숫자가 뜻하지 않는 것.** `PASS=76` 은 제품이 아니라 **그 시점에 존재하던 테스트**에 대한 진술이다.
 > 실제로 M11 시점의 `PASS=60 KNOWN_FAIL=1` 은 참이었지만, 그때 `posix_spawn` 미구현으로 **`make` 가 깨져 있었고**
 > 검사하는 테스트가 없어 PASS로도 FAIL로도 세어지지 않았다
 > ([M12 §1](docs/evidence/2026-08-03-m12-spawn-resolver.md), [M11 §6 정정](docs/evidence/2026-08-02-m11-breadth.md)).
 > 커버리지 밖은 보이지 않는다.
 
-## 열려 있는 KNOWN_FAIL 두 개
+## 열려 있는 항목
 
 | | 상태 |
 |---|---|
-| `/dev/full` 미에뮬레이션 | **의도된 영구 비목표.** 고칠 계획이 없다 |
-| `php-cli` abort | 원인 미확인. **우리 인터포지션 탓이 아님은 증명됨** |
+| `/dev/full` 미에뮬레이션 | **의도된 영구 비목표.** 고칠 계획이 없다 (유일한 `KNOWN_FAIL`) |
+| `php-cli` | 출하 빌드에서 **동작하지만 원인은 규명되지 않았다** — 아래 |
+| `codex` | 정적 musl 바이너리라 `LD_PRELOAD` 가 닿지 않는다. 실행은 되나 경로 가상화가 없다 |
+| Ubuntu 26.04 rootfs | 부팅 안 됨. v1 대상은 24.04 뿐 |
 
 **`/dev/full`** 을 서빙하려면 프로세스에서 가장 뜨거운 syscall인 `write()`를 인터포즈해야 하는데, 대상 워크로드 중
 이 디바이스 노드를 쓰는 것이 없다. 게다가 실패 표면이 열려 있어서(`puts`/`putchar`/`fwrite_unlocked`/`dprintf`/…)
 심볼 하나만 빠뜨려도 **성공한 쓰기로 조용히 통과**한다 — 열거 가능하고 요란하게 실패하는 `mkstemp`·NSS 계열과 다르다.
 근거는 [docs/RISKS.md §4](docs/RISKS.md)와 [M12 §8](docs/evidence/2026-08-03-m12-spawn-resolver.md).
 
-**`php-cli`** 는 `*** buffer overflow detected ***` 로 abort한다(breadth 95/96의 그 1건). 추측하지 않고
-**대조 실험 두 번**으로 귀속했다 — NSS 백엔드를 통째로 뺀 빌드에서도, 심볼을 하나도 정의하지 않는 **빈 `.so`**를
-preload 자리에 놓아도 동일하게 죽는다. `python3`/`ruby`/`perl`/`node`/`git`은 전부 정상이다.
-근본 원인은 **아직 미확인**이며 `KNOWN_FAIL:php-abort-unattributed` 로 남아 있다
-([M11 §5](docs/evidence/2026-08-02-m11-breadth.md)).
+**`php-cli`** 는 출하 빌드에서 동작한다. 그러나 **고쳤다고 말할 수 없다.** 대조 실험으로 우리 인터포지션 탓이
+아님은 증명했지만(NSS를 뺀 빌드에서도, 심볼이 하나도 없는 **빈 `.so`** 로도 동일하게 죽는다), 이어진 조사에서
+abort 여부가 **preload의 심볼 테이블 크기에 민감**하다는 것이 드러났다 — 경계는 ~152개 심볼이고,
+php가 `--version`에서 쓸 리 없는 심볼(`scandir`) **하나만 빼도 재발**한다. 즉 심볼을 덜어내는 변경이
+php를 다시 깨뜨릴 수 있고, **그때 범인은 그 변경이 아니다.**
+`breadth.sh`가 php를 포함하므로 회귀는 잡히지만 오귀속하기 쉽다 ([M14 §2](docs/evidence/2026-08-03-m14-ioctl-php.md)).
 
 ## 핵심 메커니즘 3줄 요약
 

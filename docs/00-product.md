@@ -37,9 +37,11 @@
 >
 > 이것은 [RISKS](RISKS.md) 의 "정적 링크 게스트 바이너리" 한계에 해당하며, `node`/`npm` 에는 적용되지 않는다(둘 다 동적 링크라 정상적으로 가상화된다). 수용 테스트가 `ALR CODEX LINKAGE` 로 이 상태를 추적한다.
 
-수용 테스트: **PASS=74 FAIL=0 KNOWN_FAIL=2 SKIP=0**. 호스트 게이트 **9/9**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). `KNOWN_FAIL` 두 건은 모두 미구현이 아니라 **알려진 성질**이다 — `/dev/full` 은 의도된 비목표([RISKS](RISKS.md)), `codex` 정적 링크는 `LD_PRELOAD` 로 원리적으로 닿을 수 없는 경우다.
+수용 테스트: **PASS=76 FAIL=0 KNOWN_FAIL=1 SKIP=0**. 호스트 게이트 **9/9**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). 남은 `KNOWN_FAIL` 은 `/dev/full` 하나이며 미구현이 아니라 **의도된 비목표**다([RISKS](RISKS.md)). `codex` 정적 링크 항목은 별도 추적 라인(`ALR CODEX LINKAGE`)으로 남아 있다.
 
-**호환성 폭 (§4 포지셔닝의 근거): 큐레이션된 96개 Ubuntu noble 패키지 중 설치 96/96, 실행 95/96** ([M11](evidence/2026-08-02-m11-breadth.md)). 유일한 실행 실패는 `php-cli` 이며 **우리 인터포지션이 원인이 아님을 대조 실험으로 확인**했다(빈 preload 로도 동일하게 abort). 근본 원인 미확인 — `KNOWN_FAIL:php-abort-unattributed`.
+**호환성 폭 (§4 포지셔닝의 근거): 큐레이션된 96개 Ubuntu noble 패키지 중 설치 96/96, 실행 96/96** ([M11](evidence/2026-08-02-m11-breadth.md), [M14](evidence/2026-08-03-m14-ioctl-php.md)).
+
+> ⚠️ `php-cli` 는 출하 빌드에서 동작하지만 **원인을 규명하고 고친 것이 아니다.** abort 여부가 preload 의 심볼 테이블 크기에 민감하다는 것이 실측되었고(경계 ~152 심볼), php 가 쓸 리 없는 심볼 하나만 빼도 재발한다. 심볼을 덜어내는 변경이 php 를 다시 깨뜨릴 수 있으며 그때 범인은 그 변경이 아니다. 자세한 내용과 진단용 컴파일 가드는 [M14 §2](evidence/2026-08-03-m14-ioctl-php.md).
 
 > 이 96/96 을 인용할 때의 정직한 표현: "빌드 툴체인·언어 런타임·CLI 유틸을 아우르는 **큐레이션된 96개** 패키지에서 무수정 설치 96/96, 실행 95/96 — 단일 MediaTek 기기 1회 세션." 아카이브 전체(수만 개)에 대한 주장이 아니다.
 
