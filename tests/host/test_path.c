@@ -39,7 +39,18 @@ static void run_case(const char *root_in, const char *in, const char *want)
     const char *got;
     int err = 0;
 
-    snprintf(rootbuf, sizeof rootbuf, "%s", root_in);
+    /* The tsv line buffer is larger than ALR_PBUF, so gcc is right that this
+     * can truncate (-Wformat-truncation).  A root that does not fit is bad
+     * test input, not something to silently shorten -- a truncated root would
+     * make every case in the row assert against a prefix that alr_rw() would
+     * never produce.  Fail loudly instead. */
+    if (strlen(root_in) >= sizeof rootbuf) {
+        fprintf(stderr, "FAIL  root longer than ALR_PBUF (%zu >= %zu): %.64s...\n",
+                strlen(root_in), sizeof rootbuf, root_in);
+        fail++;
+        return;
+    }
+    memcpy(rootbuf, root_in, strlen(root_in) + 1);
     rlen = *rootbuf ? alr_trim_root(rootbuf) : 0;
 
     memset(buf, 0xAA, sizeof buf);      /* poison: catch reads of stale buf */
