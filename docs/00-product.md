@@ -1,0 +1,107 @@
+# 00 — 제품 정의
+
+## 1. 한 줄 정의
+
+> Termux 안에서, 루팅 없이, **스톡 Ubuntu ARM64 glibc rootfs**를 **PRoot 대비 낮은 오버헤드**로 실행하는 독립형 런타임과 CLI.
+
+## 2. 타깃
+
+- **디바이스**: Snapdragon arm64, Android 12–16. (참조 디바이스 1대 이상을 Android 12대, 1대 이상을 Android 15/16대로 확보할 것 — seccomp allowlist가 릴리스마다 다르다.)
+- **호스트**: Termux **F-Droid / GitHub 빌드** (`targetSdkVersion=28`). Play Store 빌드는 **v1 미지원** (ADR 0005).
+- **게스트**: Ubuntu 24.04 (noble) arm64, glibc 2.39, `ports.ubuntu.com` 아카이브. Debian bookworm/trixie는 v1.1 목표.
+- **워크로드**: `git`, `node`(및 npm/npx), `codex`, `bash`, `apt`/`dpkg`, 일반 coreutils/빌드 툴체인.
+
+## 3. 목표 (Goals)
+
+| G | 목표 | 측정 방법 |
+|---|---|---|
+| G1 | 스톡 Ubuntu 24.04 arm64 rootfs가 **패치 없이** 부팅 | `alr run /bin/true` 성공, glibc 재빌드 0회 |
+| G2 | `apt install`이 게스트 안에서 동작 | `alr run apt-get install -y git` 성공 |
+| G3 | path syscall에 대해 **ptrace 왕복 0회** | `alr bench --trace-count` 가 `path_traps=0` 보고 |
+| G4 | `git status`(10k 파일)가 proot-distro 대비 명확히 빠름 | §4의 정직한 목표 배수 |
+| G5 | `node`, `npm`, `codex`가 실사용 가능 | `alr run codex --version`, `npm ci` 성공 |
+| G6 | 실패가 **조용하지 않음** | 모든 실패는 안정적 `reason=` 코드로 분류 |
+
+**현재 상태 (2026-08-02, MediaTek arm64, `uid=10297 Seccomp=2 untrusted_app_27`)**
+
+| G | 상태 | 근거 |
+|---|---|---|
+| G1 | **MEASURED 달성** | 스톡 Ubuntu 24.04.4 base, glibc 2.39 무패치 부팅. glibc 재빌드 0회 |
+| G2 | **MEASURED 달성** | 아무것도 없는 상태에서 `alr install --with git` **2분 27초**, `git version 2.43.0`. `openssh-client` 포함 전 패키지 `ii` ([M10](evidence/2026-08-02-m10-apt-install-git.md)) |
+| G3 | **MEASURED 달성** | 수용 테스트가 매 실행 `path_traps=0 syscall_stops=0` 보고 |
+| G4 | **MEASURED 달성** | proot-distro 대비 `git status` 34.8× — 단, §4의 인용 주의사항 필독 |
+| G5 | **부분 달성** | `node`/`npm` 은 동적 링크라 경로 가상화가 적용된다 — `npm ci` 실측 proot-distro 대비 **3.12×** ([M12](evidence/2026-08-03-m12-spawn-resolver.md)). **`codex` 는 정적 링크라 `LD_PRELOAD` 가 닿지 않는다** — 실행은 되지만 경로 가상화 없이 Android 파일시스템을 본다(아래 주석) |
+| G6 | 진행 중 | `reason=` 코드 체계는 동작. 전수 분류는 미완 |
+
+> ⚠️ **`codex --version` 이 통과한다는 것을 "codex 가 게스트 안에서 동작한다" 로 읽지 말 것.** 배포되는 codex 바이너리는 `INTERP` 프로그램 헤더도 `NEEDED` 항목도 없는 **정적 링크**(269 MB, ET_EXEC)다. `LD_PRELOAD` 는 원리적으로 닿지 않으므로 codex 의 모든 경로 연산은 rootfs 가 아니라 Android 파일시스템으로 간다. 실제로 시작할 때마다 `could not create PATH aliases: Read-only file system` 을 낸다 — 그 경로가 Android 의 읽기 전용 루트로 샌 증거다. codex 는 그 실패를 치명적으로 다루지 않아 계속 진행할 뿐이다.
+>
+> 이것은 [RISKS](RISKS.md) 의 "정적 링크 게스트 바이너리" 한계에 해당하며, `node`/`npm` 에는 적용되지 않는다(둘 다 동적 링크라 정상적으로 가상화된다). 수용 테스트가 `ALR CODEX LINKAGE` 로 이 상태를 추적한다.
+
+수용 테스트: **PASS=74 FAIL=0 KNOWN_FAIL=2 SKIP=0**. 호스트 게이트 **9/9**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). `KNOWN_FAIL` 두 건은 모두 미구현이 아니라 **알려진 성질**이다 — `/dev/full` 은 의도된 비목표([RISKS](RISKS.md)), `codex` 정적 링크는 `LD_PRELOAD` 로 원리적으로 닿을 수 없는 경우다.
+
+**호환성 폭 (§4 포지셔닝의 근거): 큐레이션된 96개 Ubuntu noble 패키지 중 설치 96/96, 실행 95/96** ([M11](evidence/2026-08-02-m11-breadth.md)). 유일한 실행 실패는 `php-cli` 이며 **우리 인터포지션이 원인이 아님을 대조 실험으로 확인**했다(빈 preload 로도 동일하게 abort). 근본 원인 미확인 — `KNOWN_FAIL:php-abort-unattributed`.
+
+> 이 96/96 을 인용할 때의 정직한 표현: "빌드 툴체인·언어 런타임·CLI 유틸을 아우르는 **큐레이션된 96개** 패키지에서 무수정 설치 96/96, 실행 95/96 — 단일 MediaTek 기기 1회 세션." 아카이브 전체(수만 개)에 대한 주장이 아니다.
+
+## 4. 성능 목표 — 정직하게 쓸 것
+
+검증 결과 기존 통념 여러 개가 반박되었다. 마케팅과 문서는 **아래 숫자만** 쓴다.
+
+**반박된 주장 (쓰지 말 것)**
+
+- ❌ "PRoot는 모든 syscall에 ptrace를 건다" — 틀렸다. PRoot는 필터 테이블의 ~100개 syscall(경로 관련 + 프로세스 라이프사이클)만 트랩한다. `read`/`write`/`futex`는 `RET_ALLOW` 속도로 지나간다.
+- ❌ "10배 빠르다" — 어떤 증거로도 뒷받침되지 않는다.
+- ❌ "grun보다 빠르다" — `grun`은 동등하거나 미세하게 빠르다. **속도로 grun과 정면 비교하지 말 것.**
+
+**방어 가능한 주장 (이것만 쓸 것)**
+
+| 워크로드 | vs proot-distro 목표 | 근거 |
+|---|---|---|
+| `git status` (10k 파일) | ~~1.5–4×~~ → **실측 34.8×** | [M8 실측](evidence/2026-08-02-m7-m8-workloads-perf.md). 아래 주석 필독 |
+| `npm ci` | ~~1.5–3×~~ → **실측 3.12×** | [M12 실측](evidence/2026-08-03-m12-spawn-resolver.md). 동일 node 바이너리·락파일·캐시로 잰 값이라 M8 의 git 비교보다 조건이 깨끗하다 |
+| `node -e 0` 콜드 스타트 | **1.05–1.4×** | 여기가 가장 약하다. 히어로 벤치로 쓰지 말 것 |
+| 로그인/세션 진입 | 1회 **30–100 ms** 절약 | proot-distro 셸 진입 오버헤드 |
+| 종합 (UnixBench류) | **상한 1.8× — 목표가 아니다.** 실측은 `PENDING_DEVICE` | 아래 주석 참조 |
+
+> ⚠️ **1.8×를 목표로 인용하지 말 것.** 공개된 0.56×는 *proot ÷ native* 비율이므로 1/0.56 = 1.79는 *native ÷ proot*다. 이것을 alr의 목표로 쓰면 **alr = native, 즉 alr 오버헤드 0을 암묵적으로 주장**하게 되는데, 우리 문서가 스스로 반박한다: execve마다 DSO가 하나 더 매핑·재배치되고 전역 심볼 스코프가 커지며([§D2](01-platform-facts.md)), auditallow 로그가 프로세스당 ~40 레코드씩 쌓인다([RISKS R5, R6](RISKS.md) — PRoot는 게스트 바이너리를 직접 exec하지 않아 이 비용이 없다). UnixBench류 종합 지수는 process creation과 execl 처리량이 지배하는데, 그것이 정확히 alr 고유 비용이 얹히는 곳이다. 실제 값은 반드시 1.8×보다 낮다.
+
+> ⚠️ **2026-08-02 실측이 이 표의 추정을 뒤집었다.** 동일 기기·동일 워크로드에서 `git status` **34.8×**, 프로세스 기동 **10.9×** 빠르다(proot-distro 대비). 1.5–4× 추정은 과소평가였다.
+>
+> **그래도 34.8×를 헤드라인으로 쓰지 말 것.** 세 실행의 git 빌드가 다르고(2.55/2.43/2.53), proot-distro는 자체 rootfs를 쓰며, 기기는 MediaTek이고, 1회 세션 측정이다. **권장 표현**: "동일 기기·동일 워크로드에서 proot-distro 대비 git status 30배 이상, 프로세스 기동 10배 이상 — 단일 MediaTek 기기 1회 세션, git 빌드 상이."
+
+**히어로 벤치마크는 `git status`와 `npm ci`로 고정한다.** `node` 콜드 스타트는 명시적으로 디엠퍼사이즈한다.
+
+**포지셔닝 문장 (승인된 표현):**
+
+> grun은 빠르지만 포크된 glibc와 포크된 패키지 세트를 요구한다. proot-distro는 Ubuntu 아카이브 전체를 쓰지만 path syscall마다 ptrace 비용을 낸다. **alr은 둘 다 얻는 첫 시도다.**
+
+이 포지셔닝이 성립하려면 **호환성 폭(breadth)을 숫자로 방어**해야 한다 ([07-acceptance.md §5](07-acceptance.md)). **측정 완료**: 큐레이션된 96개 패키지에서 설치 96/96, 실행 95/96 ([M11](evidence/2026-08-02-m11-breadth.md)). 인용 시 §3의 정직한 표현을 쓸 것 — 아카이브 전체에 대한 주장이 아니다.
+
+## 5. 비목표 (Non-goals)
+
+- **GUI / X11 / Wayland / GPU 가속.** 상위 프로젝트(android-on-linux)의 영역. `alr`은 CLI 전용이다.
+- **Play Store Termux 지원** (ADR 0005).
+- **보안 격리.** `alr`은 샌드박스가 **아니다**. 경로 재작성은 방어 경계가 아니다.
+- **x86 에뮬레이션** (box64/FEX). 네이티브 arm64만.
+- **systemd / init / 서비스 관리.**
+- **setuid 의미론.** `/data`는 `nosuid`이며 setuid/setgid는 seccomp로 막혀 있다. `sudo`류는 동작하지 않는다.
+- **Go로 컴파일된 게스트 바이너리의 완전 지원.** Go는 libc를 우회해 raw `svc`를 발행하므로 `LD_PRELOAD` 인터포저가 잡지 못한다. `alr doctor`가 경고하고 문서로 명시한다.
+- **`/dev/full` 에뮬레이션.** 서빙하려면 프로세스에서 가장 뜨거운 syscall 인 `write()` 를 인터포즈해야 하는데 대상 워크로드 중 쓰는 것이 없고, 빠뜨린 stdio 심볼은 전부 **조용히 성공한 쓰기**가 된다 — 열거 가능하고 요란하게 실패하는 다른 인터포지션과 성격이 다르다. 근거는 [RISKS](RISKS.md).
+
+## 6. 정직성 규칙 (프로젝트 헌장)
+
+상위 프로젝트에서 그대로 가져오는 규칙이다. Codex는 이것을 어기면 안 된다.
+
+1. **MEASURED와 MODELED를 절대 섞지 말 것.** 디바이스에서 잰 숫자만 `MEASURED`. 그 외 전부 `MODELED` 또는 `PENDING_DEVICE`.
+2. **속도 향상을 지어내지 말 것.** A/B 실측 전에는 `relative_to_proot=PENDING_DEVICE`.
+3. **실패를 PASS로 바꾸지 말 것.** `PASS` / `FAIL` / `SKIP` / `KNOWN_FAIL:<reason>` / `PENDING_DEVICE` 다섯 가지만 쓴다 ([07-acceptance.md §1](07-acceptance.md)에 각각의 의미). `PENDING_DEVICE`는 PASS도 FAIL도 아니며 pass-rate 분모에서 제외하지만, 마일스톤 `Exit`에 남아 있으면 그 마일스톤은 미완이다.
+4. **미검증 항목은 UNVERIFIED로 표기.** 추측 금지.
+5. **클린룸 유지.** PRoot·termux-exec의 *동작*은 참고하되 소스를 복사하지 않는다. 알고리즘을 재설명하고 직접 구현한다. (라이선스 검토가 끝나기 전까지.)
+6. **루팅된/permissive 디바이스로 검증하지 말 것.** `getenforce == Enforcing` 이고 `/proc/self/status`의 `Seccomp: 2`인 디바이스만 유효한 증거다. permissive 디바이스에서는 zygote seccomp 필터가 아예 설치되지 않아 모든 문제가 사라져 보인다.
+
+## 7. 이름과 네임스페이스
+
+- CLI 바이너리: `alr`
+- 환경변수 접두사: `ALR_`  (상위 프로젝트와 동일 — 문서/툴 재사용을 위해 의도적으로 유지)
+- 게스트 내 설치 경로: `/usr/lib/alr/`
+- 호스트 데이터 루트: `$PREFIX/var/lib/alr/`
