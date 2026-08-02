@@ -1,6 +1,9 @@
 # alr — build entry points.
 #
 #   make test        host-side core tests (macOS or Linux, no device needed)
+#                    NOTE: CI runs this leg on gcc too, and gcc warns where
+#                    clang does not (-Wformat-truncation, -Wuninitialized).
+#                    Reproduce that leg locally with:  make test CC=gcc-16
 #   make preload     guest-side libalr_preload.so under the pinned zig
 #   make alr         cross-build the alr binary with the NDK
 #   make doctor      cross-build alr-doctor with the NDK

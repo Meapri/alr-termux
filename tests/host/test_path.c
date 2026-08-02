@@ -36,7 +36,7 @@ static void run_case(const char *root_in, const char *in, const char *want)
     char rootbuf[ALR_PBUF];
     char buf[ALR_PBUF];
     size_t rlen;
-    const char *got;
+    const char *got = NULL;
     int err = 0;
 
     /* The tsv line buffer is larger than ALR_PBUF, so gcc is right that this
@@ -82,8 +82,8 @@ static void run_generated(void)
     char buf[ALR_PBUF];
     const char *root = "/data/alr/ubuntu";
     size_t rlen = strlen(root);
-    const char *got;
-    int err;
+    const char *got = NULL;
+    int err = 0;
     size_t i;
 
     /* GEN_TOOLONG: a guest path that cannot fit once prefixed. */

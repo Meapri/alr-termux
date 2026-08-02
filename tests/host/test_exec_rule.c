@@ -158,7 +158,7 @@ static void t_elf(void)
 static void t_preload(void)
 {
     char out[1024];
-    int changed;
+    int changed = 0;               /* see t_env: gcc -Wuninitialized, clang not */
 
     ck(alr_build_ld_preload(NULL, IP, NULL, out, sizeof out, &changed)
            && !strcmp(out, IP) && changed,
@@ -207,7 +207,11 @@ static void t_preload(void)
 
 static void t_env(void)
 {
-    const char *v;
+    /* Initialised because gcc cannot see through the && short-circuit and
+     * -Wuninitialized fires (clang does not).  "" is also the right poison:
+     * if a callee ever fails to set v, the assertion reports an empty value
+     * rather than dereferencing garbage or NULL. */
+    const char *v = "";
     ck(alr_split_env("KEY=val", &v) == 3 && !strcmp(v, "val"),
        "split_env normal", v, "val");
     ck(alr_split_env("BARE", &v) == 4 && !*v, "split_env bare key", v, "");
