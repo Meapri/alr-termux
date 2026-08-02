@@ -108,6 +108,20 @@ ckc "PRELOAD PATH SEARCH GUEST"  "Ubuntu GLIBC" $ALR run /bin/bash -c 'ldd --ver
 ck  "PRELOAD NORMALIZE BEFORE SYSDIR" "ID=ubuntu" \
     $ALR run /bin/bash -c 'grep -m1 ^ID= /proc/../etc/os-release'
 ckc "PRELOAD SYSDIR PASSTHROUGH"  "Name:" $ALR run /bin/bash -c 'grep -m1 Name /proc/self/status'
+# /proc/self/cmdline must show the GUEST argv, not the loader invocation.  Left
+# raw it exposed every host path in --library-path to anything reading cmdline,
+# and docs/04-preload-spec.md §7 required synthesising it from the start.
+# Read it with `cat` directly and translate on the HOST side: routing through a
+# guest shell would report the SHELL's argv, and putting the host-path pattern
+# in the guest command line makes the check match itself.
+cl=$($ALR run /bin/cat /proc/self/cmdline 2>/dev/null | tr '\0' ' ' | sed 's/ *$//')
+[ "$cl" = "/bin/cat /proc/self/cmdline" ] \
+    && emit "PRELOAD PROC CMDLINE" PASS \
+    || emit "PRELOAD PROC CMDLINE" FAIL "got='$cl'"
+case "$cl" in
+    */data/data/*|*ld-linux*) emit "PRELOAD CMDLINE NO HOST PATH" FAIL "$cl";;
+    *)                        emit "PRELOAD CMDLINE NO HOST PATH" PASS;;
+esac
 ckrc "PRELOAD OPENDIR"            0 $ALR run /bin/ls /
 n=$($ALR run /bin/ls / 2>/dev/null | wc -l | tr -d ' ')
 [ "${n:-0}" -ge 15 ] && emit "PRELOAD LS ENTRY COUNT" PASS "$n entries" \

@@ -98,14 +98,14 @@ alr version                 # 버전 / preload 경로 / preload sha256 / rootfs 
 ### 수용 테스트
 
 ```
-PASS=76  FAIL=0  KNOWN_FAIL=1  SKIP=0
+PASS=78  FAIL=0  KNOWN_FAIL=2  SKIP=0
 ```
 
-[M14](docs/evidence/2026-08-03-m14-ioctl-php.md) 시점 (라운드별로 60 → 73 → 74 → 76).
+[M15](docs/evidence/2026-08-03-m15-cmdline-2604.md) 시점 (라운드별로 60 → 73 → 74 → 76 → 78).
 매 실행 `path_traps=0 syscall_stops=0` 을 함께 보고한다 — **path syscall에 ptrace를 걸지 않는다는 것이
 PRoot와 갈리는 불변식**이고, 이 줄이 그것을 실행마다 확인해 준다.
 
-> **이 숫자가 뜻하지 않는 것.** `PASS=76` 은 제품이 아니라 **그 시점에 존재하던 테스트**에 대한 진술이다.
+> **이 숫자가 뜻하지 않는 것.** `PASS=78` 은 제품이 아니라 **그 시점에 존재하던 테스트**에 대한 진술이다.
 > 실제로 M11 시점의 `PASS=60 KNOWN_FAIL=1` 은 참이었지만, 그때 `posix_spawn` 미구현으로 **`make` 가 깨져 있었고**
 > 검사하는 테스트가 없어 PASS로도 FAIL로도 세어지지 않았다
 > ([M12 §1](docs/evidence/2026-08-03-m12-spawn-resolver.md), [M11 §6 정정](docs/evidence/2026-08-02-m11-breadth.md)).
@@ -118,7 +118,7 @@ PRoot와 갈리는 불변식**이고, 이 줄이 그것을 실행마다 확인�
 | `/dev/full` 미에뮬레이션 | **의도된 영구 비목표.** 고칠 계획이 없다 (유일한 `KNOWN_FAIL`) |
 | `php-cli` | 출하 빌드에서 **동작하지만 원인은 규명되지 않았다** — 아래 |
 | `codex` | 정적 musl 바이너리라 `LD_PRELOAD` 가 닿지 않는다. 실행은 되나 경로 가상화가 없다 |
-| Ubuntu 26.04 rootfs | 부팅 안 됨. v1 대상은 24.04 뿐 |
+| Ubuntu 26.04 rootfs | **부팅한다.** uutils coreutils 계열만 실패하고 원인은 미규명. v1 대상은 24.04 뿐이고 설치 시 경고한다 |
 
 **`/dev/full`** 을 서빙하려면 프로세스에서 가장 뜨거운 syscall인 `write()`를 인터포즈해야 하는데, 대상 워크로드 중
 이 디바이스 노드를 쓰는 것이 없다. 게다가 실패 표면이 열려 있어서(`puts`/`putchar`/`fwrite_unlocked`/`dprintf`/…)

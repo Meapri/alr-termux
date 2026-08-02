@@ -199,7 +199,9 @@ getgrouplist
 socket
 
 # --- 7    /proc virtualization
-# §7
+# §7 — /proc/self/cmdline is synthesised through the open/fopen wrappers above;
+# leaving it raw exposed the whole loader invocation and made every uutils
+# coreutils tool on Ubuntu 26.04 unusable (it resolves its own name from there).
 setmntent
 
 # --- 9    exec re-dispatch

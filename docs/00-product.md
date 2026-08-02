@@ -37,7 +37,7 @@
 >
 > 이것은 [RISKS](RISKS.md) 의 "정적 링크 게스트 바이너리" 한계에 해당하며, `node`/`npm` 에는 적용되지 않는다(둘 다 동적 링크라 정상적으로 가상화된다). 수용 테스트가 `ALR CODEX LINKAGE` 로 이 상태를 추적한다.
 
-수용 테스트: **PASS=76 FAIL=0 KNOWN_FAIL=1 SKIP=0**. 호스트 게이트 **9/9**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). 남은 `KNOWN_FAIL` 은 `/dev/full` 하나이며 미구현이 아니라 **의도된 비목표**다([RISKS](RISKS.md)). `codex` 정적 링크 항목은 별도 추적 라인(`ALR CODEX LINKAGE`)으로 남아 있다.
+수용 테스트: **PASS=78 FAIL=0 KNOWN_FAIL=2 SKIP=0**. 호스트 게이트 **9/9**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). 남은 `KNOWN_FAIL` 은 `/dev/full` 하나이며 미구현이 아니라 **의도된 비목표**다([RISKS](RISKS.md)). `codex` 정적 링크 항목은 별도 추적 라인(`ALR CODEX LINKAGE`)으로 남아 있다.
 
 **호환성 폭 (§4 포지셔닝의 근거): 큐레이션된 96개 Ubuntu noble 패키지 중 설치 96/96, 실행 96/96** ([M11](evidence/2026-08-02-m11-breadth.md), [M14](evidence/2026-08-03-m14-ioctl-php.md)).
 

@@ -590,34 +590,52 @@ static int install_preload(const char *R)
  * Parsed in C rather than an awk one-liner because the '*' binary marker is
  * optional in SHA256SUMS and silently ending up with "*ubuntu-base-..." in the
  * URL would 404 in a way that reads like a network problem. */
-#define ALR_UBUNTU_BASE \
-    "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release"
-#define ALR_UBUNTU_PIN "ubuntu-base-24.04.4-base-arm64.tar.gz"
+#define ALR_UBUNTU_CDIMAGE "https://cdimage.ubuntu.com/ubuntu-base/releases"
+#define ALR_UBUNTU_PIN     "ubuntu-base-24.04.4-base-arm64.tar.gz"
+#define ALR_SUFFIX         "-base-arm64.tar.gz"
 
-static int discover_ubuntu(char *url, size_t urlsz, char *sha, size_t shasz)
+/* `rel` is the release as it appears in the URL and the file names: "24.04",
+ * "26.04".  The two are NOT named alike -- 24.04 carries a point release
+ * (ubuntu-base-24.04.4-base-arm64.tar.gz) and 26.04, freshly out, does not
+ * (ubuntu-base-26.04-base-arm64.tar.gz).  Match both, and prefer the highest
+ * point release when several exist; a bare name counts as point 0 so it wins
+ * only when nothing else matches. */
+static int discover_ubuntu(const char *rel, char *url, size_t urlsz,
+                           char *sha, size_t shasz)
 {
-    char cmd[512], line[512];
+    char cmd[512], line[512], pfx[64];
     char bestname[256], besthash[80];
     FILE *fp;
+    size_t plen;
     long best = -1;
 
     bestname[0] = besthash[0] = '\0';
+    plen = (size_t)snprintf(pfx, sizeof pfx, "ubuntu-base-%s", rel);
+    if (plen >= sizeof pfx) return -1;
+
     snprintf(cmd, sizeof cmd,
-             "curl -fsSL --max-time 60 --retry 3 '%s/SHA256SUMS' 2>/dev/null",
-             ALR_UBUNTU_BASE);
+             "curl -fsSL --max-time 60 --retry 3 '%s/%s/release/SHA256SUMS' 2>/dev/null",
+             ALR_UBUNTU_CDIMAGE, rel);
     if (!(fp = popen(cmd, "r"))) return -1;
     while (fgets(line, sizeof line, fp)) {
         char h[80], name[256];
-        const char *n;
-        char *end;
+        const char *n, *rest;
         long pt;
         if (sscanf(line, "%79s %255s", h, name) != 2) continue;
         if (strlen(h) != 64) continue;
         n = name;
         if (*n == '*') n++;                       /* binary marker */
-        if (strncmp(n, "ubuntu-base-24.04.", 18) != 0) continue;
-        pt = strtol(n + 18, &end, 10);
-        if (end == n + 18 || strcmp(end, "-base-arm64.tar.gz") != 0) continue;
+        if (strncmp(n, pfx, plen) != 0) continue;
+        rest = n + plen;
+        if (*rest == '.') {                       /* ...-24.04.4-base-arm64... */
+            char *end;
+            pt = strtol(rest + 1, &end, 10);
+            if (end == rest + 1 || strcmp(end, ALR_SUFFIX) != 0) continue;
+        } else if (strcmp(rest, ALR_SUFFIX) == 0) {
+            pt = 0;                               /* ...-26.04-base-arm64...   */
+        } else {
+            continue;
+        }
         if (pt > best) {
             best = pt;
             snprintf(bestname, sizeof bestname, "%s", n);
@@ -626,7 +644,7 @@ static int discover_ubuntu(char *url, size_t urlsz, char *sha, size_t shasz)
     }
     pclose(fp);
     if (best < 0) return -1;
-    snprintf(url, urlsz, "%s/%s", ALR_UBUNTU_BASE, bestname);
+    snprintf(url, urlsz, "%s/%s/release/%s", ALR_UBUNTU_CDIMAGE, rel, bestname);
     snprintf(sha, shasz, "%s", besthash);
     return 0;
 }
@@ -711,15 +729,27 @@ static int cmd_install(const char *distro, const char *url_override)
     mk[2] = part; run_cmd(mk);
 
     if (!url) {
-        if (strcmp(distro, "ubuntu-24.04") != 0)
+        if (strncmp(distro, "ubuntu-", 7) != 0)
             die("unsupported-distro",
                 "no discovery path for this distro yet; pass --url "
                 "(docs/05-provisioning-spec.md §1.1)");
-        printf("alr: resolving the current ubuntu-base point release\n");
-        if (discover_ubuntu(durl, sizeof durl, dsha, sizeof dsha) != 0) {
+        /* v1 targets 24.04 only (docs/00-product.md §2).  26.04 installs and
+         * boots, but its coreutils is the uutils multicall binary, which
+         * resolves its own name in a way a correct argv[0] does not satisfy
+         * under an explicit loader (ADR 0002) -- every coreutils tool is
+         * unusable there.  Say so at install time rather than letting the
+         * rootfs look fine until the first `ls`. */
+        if (strcmp(distro, "ubuntu-24.04") != 0)
+            fprintf(stderr,
+                "alr: WARNING %s is not a v1 target.  Everything except the\n"
+                "     uutils coreutils family is expected to work; ls/cat/echo\n"
+                "     and friends will fail.  See docs/RISKS.md.\n", distro);
+        printf("alr: resolving the current ubuntu-base image for %s\n", distro + 7);
+        if (discover_ubuntu(distro + 7, durl, sizeof durl, dsha, sizeof dsha) != 0) {
             /* Offline / air-gapped fallback.  Say plainly that the download is
              * unverified rather than implying the pin is as good as a hash. */
-            snprintf(durl, sizeof durl, "%s/%s", ALR_UBUNTU_BASE, ALR_UBUNTU_PIN);
+            snprintf(durl, sizeof durl, "%s/24.04/release/%s",
+                     ALR_UBUNTU_CDIMAGE, ALR_UBUNTU_PIN);
             dsha[0] = '\0';
             fprintf(stderr, "alr: WARNING SHA256SUMS unreachable; falling back to "
                             "the pinned %s WITHOUT hash verification\n",

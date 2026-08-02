@@ -435,6 +435,108 @@ static const char *synth_stat(void)
     return g_statbuf;
 }
 
+/* /proc/self/cmdline exposes the ENTIRE loader invocation:
+ *
+ *   .../ld-linux-aarch64.so.1\0--library-path\0/data/data/com.termux/...\0
+ *   --inhibit-cache\0--argv0\0/bin/echo\0--preload\0...\0<R>/bin/echo\0
+ *
+ * docs/04-preload-spec.md §7 requires synthesising it and it never was.  Two
+ * consequences, one of them a hard boot failure:
+ *
+ *  - Ubuntu 26.04 ships uutils coreutils as a multicall binary that resolves
+ *    its own name from here, not from argv[0].  It read the loader and died
+ *    with "coreutils: unknown program 'ld-linux-aarch64.so'" -- Rust's
+ *    file_stem() having eaten the ".1".  EVERY coreutils tool was unusable.
+ *  - Every host path in the invocation leaks to anything reading cmdline.
+ *
+ * Rebuild the guest's own argv by walking off the loader options we emit.  No
+ * new environment variable is needed: --argv0 already carries argv[0], and the
+ * guest's arguments are whatever follows the program path.  A process not
+ * started through our loader (a static binary, or the CLI itself) has a
+ * correct cmdline already and is passed through untouched. */
+static char g_cmdbuf[8192];
+static size_t g_cmdlen;      /* NUL-separated: strlen() would lie about it */
+
+static int synth_is_ldso(const char *a)
+{
+    const char *b = a ? strrchr(a, '/') : NULL;
+    b = b ? b + 1 : a;
+    return b && strncmp(b, "ld-linux", 8) == 0;
+}
+
+static const char *synth_cmdline(void)
+{
+    char raw[8192];
+    const char *argv[256];
+    const char *argv0 = NULL;
+    ssize_t n;
+    size_t i, o = 0;
+    int fd, k, argc = 0, prog = -1;
+
+    if (!real_open) return NULL;
+    if ((fd = real_open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC)) < 0) return NULL;
+    n = read(fd, raw, sizeof raw - 1);
+    close(fd);
+    if (n <= 0) return NULL;
+    raw[n] = '\0';
+
+    /* Split on NUL.  The kernel NUL-terminates every entry including the last. */
+    for (i = 0; (ssize_t)i < n && argc < (int)(sizeof argv / sizeof *argv); ) {
+        argv[argc++] = raw + i;
+        i += strlen(raw + i) + 1;
+    }
+    if (argc == 0 || !synth_is_ldso(argv[0])) return NULL;   /* not ours */
+
+    for (k = 1; k < argc; ) {
+        if (!strcmp(argv[k], "--library-path") || !strcmp(argv[k], "--preload")) k += 2;
+        else if (!strcmp(argv[k], "--argv0")) { if (k + 1 < argc) argv0 = argv[k + 1]; k += 2; }
+        else if (!strcmp(argv[k], "--inhibit-cache")) k += 1;
+        else { prog = k; break; }
+    }
+    if (prog < 0) return NULL;
+    if (!argv0) argv0 = g_guest_exe ? g_guest_exe : argv[prog];
+
+    /* argv0, then everything AFTER the program path, NUL separated. */
+    { size_t l = strlen(argv0);
+      if (l + 1 > sizeof g_cmdbuf) return NULL;
+      memcpy(g_cmdbuf, argv0, l + 1); o = l + 1; }
+    for (k = prog + 1; k < argc; k++) {
+        size_t l = strlen(argv[k]);
+        if (o + l + 1 > sizeof g_cmdbuf) break;
+        memcpy(g_cmdbuf + o, argv[k], l + 1);
+        o += l + 1;
+    }
+    g_cmdlen = o;
+    return g_cmdbuf;
+}
+
+#ifdef ALR_TRACE_AUXV
+#include <sys/auxv.h>
+
+/* What argv does the failing process ACTUALLY receive?  Everything else has
+ * been excluded by measurement (no /proc access, auxv only HWCAP), so this is
+ * the remaining variable. */
+__attribute__((constructor))
+static void alr_trace_argv(int argc, char **argv, char **envp)
+{
+    (void)envp;
+    lg("alr trace argv: argc=%d argv[0]=%s argv[1]=%s\n", argc,
+       (argc > 0 && argv[0]) ? argv[0] : "(none)",
+       (argc > 1 && argv[1]) ? argv[1] : "(none)");
+}
+unsigned long getauxval(unsigned long t)
+{
+    static unsigned long (*real_gav)(unsigned long);
+    unsigned long v;
+    if (!real_gav) real_gav = dlsym(RTLD_NEXT, "getauxval");
+    if (!real_gav) return 0;
+    v = real_gav(t);
+    if (t == AT_EXECFN) lg("alr trace auxv: AT_EXECFN=%s\n", v ? (const char *)v : "(0)");
+    else                lg("alr trace auxv: type=%lu val=%lu\n", t, v);
+    return v;
+}
+#endif
+
 static const char *synth_for(const char *p)
 {
     if (!p || strncmp(p, "/proc/", 6) != 0) return NULL;
@@ -443,6 +545,7 @@ static const char *synth_for(const char *p)
     else if (strncmp(p, "thread-self/", 12) == 0) p += 12;
     if (strcmp(p, "mounts") == 0)    return SYNTH_MOUNTS;
     if (strcmp(p, "mountinfo") == 0) return SYNTH_MOUNTINFO;
+    if (strcmp(p, "cmdline") == 0)   return synth_cmdline();
     /* Only synthesise /proc/stat when the real one is genuinely unreachable;
      * on a device that allows it, the real numbers are strictly better. */
     if (strcmp(p, "stat") == 0 && real_access &&
@@ -459,7 +562,7 @@ static int synth_fd(const char *content)
 {
     char tmpl[64], b[ALR_PBUF];
     const char *p;
-    size_t n = strlen(content);
+    size_t n = (content == g_cmdbuf) ? g_cmdlen : strlen(content);
     int fd;
 
     if (synth_leaks(content)) { lg("alr synth: refused, host path in table\n"); return -1; }
@@ -482,6 +585,9 @@ int open(const char *path, int flags, ...)
         int fd; ensure_init();
         if ((fd = synth_fd(s)) >= 0) return fd;
     }
+#ifdef ALR_TRACE_AUXV
+    if (path && strncmp(path, "/proc/", 6) == 0) lg("alr trace open: %s\n", path);
+#endif
     { P(path); NEED(open); return real_open(_p, flags, m); }
 }
 int open64(const char *path, int flags, ...) __attribute__((alias("open")));
@@ -495,6 +601,9 @@ int openat(int dfd, const char *path, int flags, ...)
         int fd; ensure_init();
         if ((fd = synth_fd(s)) >= 0) return fd;
     }
+#ifdef ALR_TRACE_AUXV
+    if (path && strncmp(path, "/proc/", 6) == 0) lg("alr trace openat: %s\n", path);
+#endif
     { P(path); NEED(openat); return real_openat(dfd, _p, flags, m); }
 }
 int openat64(int dfd, const char *path, int flags, ...) __attribute__((alias("openat")));
@@ -613,6 +722,9 @@ int faccessat(int dfd, const char *path, int m, int f)
 
 ssize_t readlink(const char *path, char *buf, size_t sz)
 {
+#ifdef ALR_TRACE_AUXV
+    if (path && strncmp(path, "/proc/", 6) == 0) lg("alr trace readlink: %s\n", path);
+#endif
     if (is_self_exe(path) && g_guest_exe) {
         size_t n = strlen(g_guest_exe);
         if (n > sz) n = sz;
