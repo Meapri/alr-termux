@@ -146,7 +146,9 @@ allowlist 부재로 차단되는 것(확인됨): `set_robust_list`(99), `get_rob
 >
 > **근거**: 두 기기 모두 Android 16이다. 갈린 것(SoC 벤더, 커널 6.1→6.6, android14→android15 공통 브랜치)은 전부 무관했고, **정작 allowlist가 실제로 따라가는 축**(android12 365줄 → android16 392줄)은 고정된 채로 남았다. 즉 이 결과는 **"SoC 벤더·커널은 상관없다"** 는 강한 증거이고 "Android 버전도 상관없다"는 증거는 **아니다**. 그 증거를 만들지 않기로 했으므로 지원 범위에서 뺀다.
 >
-> ⚠️ **고정된 축이 하나 더 있다 — OEM.** 두 기기 다 **Samsung** 이다(`docs/evidence/sweeps/*.txt` 의 `# device` 줄). allowlist 는 SoC 벤더가 아니라 **OEM 이 빌드한 플랫폼 이미지 안의 bionic** 에서 온다. 그러므로 **다른 OEM 의 Android 16 은 여전히 진짜 미측정**이며, 범위 결정으로 닫힌 항목이 아니다.
+> ⚠️ **고정된 축이 하나 더 있다 — OEM.** 두 기기 다 **Samsung** 이다(`docs/evidence/sweeps/*.txt` 의 `# device` 줄). allowlist 는 SoC 벤더가 아니라 **OEM 이 빌드한 플랫폼 이미지 안의 bionic** 에서 온다. 그러므로 이 실측이 닫은 것은 **SoC·커널 축**이다.
+>
+> **이 축은 재지 못했고 잴 수단도 없다.** 릴리스 축과 달리 **변한다는 증거는 없다** — `SECCOMP_ALLOWLIST_*.TXT` 는 AOSP bionic 이 배포하고 OEM 이 고친 사례를 알지 못한다. 그러나 모르는 것은 잰 것이 아니므로, 다른 OEM 을 **된다고도 안 된다고도 적지 않는다.** 그 기기에서는 `alr doctor` 스윕 + `scripts/diff-sweep.sh` 가 사용자 자신의 계측기다.
 > **무엇이 이것을 끝내는가**: 아무것도 필요 없다 — **결정으로 닫혔다.** 이 항목이 걸고 있던 두 질문(차단 집합 일반화, `openat2`/`faccessat2` 채택)은 각각 [ADR 0007](adr/0007-android-16-only.md) 의 Decision 과 §3 에서 답이 났다.
 > **막고 있던 것**: 구버전 Android 기기였다. 기술적 장애물은 없었고 지금도 없다 — 그래서 이것은 blocker 가 아니라 **선택**이었다. 새 기기(같은 Android 16, 다른 벤더)를 얻으면 여전히 스윕을 돌려 `scripts/diff-sweep.sh` 로 비교한다. `PTRACE_SECCOMP_GET_FILTER` 지름길은 `CAP_SYS_ADMIN` 이 필요해 여전히 불가이므로 스윕이 유일한 길이다.
 >

@@ -6,7 +6,7 @@
 > **`alr` 은 Android 16 전용이다.** 다른 릴리스는 **지원 범위 밖**이며, 검증하지 않고 동작을 주장하지 않는다
 > ([ADR 0007](adr/0007-android-16-only.md)).
 > 참조 디바이스는 **2대 — MediaTek(커널 6.1)과 Snapdragon 8 Elite(커널 6.6), 둘 다 Android 16.**
-> 두 기기의 zygote 차단 syscall 239개 집합이 완전히 동일해 **SoC 벤더·커널 축은 실측으로 닫혔다**(단 두 기기 다 Samsung 이라 **OEM 축은 미측정**)
+> 두 기기의 zygote 차단 syscall 239개 집합이 완전히 동일해 **SoC 벤더·커널 축은 실측으로 닫혔다**(단 두 기기 다 Samsung 이라 **OEM 축은 미측정이고 잴 수단이 없다** — 다른 OEM 이 안 된다는 뜻이 아니라 확인해 주지 못한다는 뜻이다)
 > ([M19](evidence/2026-08-03-m19-snapdragon.md)).
 
 ## 1. 기기 요구사항

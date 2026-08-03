@@ -31,9 +31,17 @@
  *
  * One axis is still unvaried and it is NOT the release: both reference
  * devices are SAMSUNG.  The allowlist comes from the OEM's platform build of
- * bionic, not from the SoC vendor, so a different OEM on Android 16 remains
- * genuinely unmeasured -- unlike Android 12-15, which is out of scope by
- * decision.
+ * bionic, not from the SoC vendor, so a different OEM on Android 16 is
+ * unmeasured -- and there is no way to obtain such a device, so it stays that
+ * way.  That is a permanent limit of the evidence, not a pending task.
+ *
+ * It differs from the Android 12-15 case in kind.  The release axis is KNOWN
+ * to vary (365 -> 392 allowlist lines), so extrapolating across it would be
+ * unjustified and those releases are out of scope.  The OEM axis has no
+ * evidence of variation -- SECCOMP_ALLOWLIST_*.TXT ships in AOSP bionic and
+ * no case of an OEM patching it is known here -- but not knowing is not
+ * measuring.  So this table is neither claimed nor denied for other OEMs;
+ * `alr doctor`'s sweep is what tells a user on one.
  *
  * On ANY OTHER Android release this table is an unvalidated guess.  The
  * allowlist grows with each release (android12 365 lines -> android16 392),

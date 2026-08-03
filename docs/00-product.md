@@ -13,11 +13,15 @@
 | MediaTek MT8775, Android 16 (커널 `6.1.145-android14`) | **검증됨** — 수용 78, 폭 96/96 |
 | Qualcomm Snapdragon 8 Elite SM8750, Android 16 (커널 `6.6.98-android15`) | **검증됨** — 수용 78, 폭 96/96 ([M19](evidence/2026-08-03-m19-snapdragon.md)) |
 | Android 12 / 13 / 14 / 15 (모든 기기) | **범위 밖 — 지원하지 않는다.** 검증 계획 없음 ([ADR 0007](adr/0007-android-16-only.md)) |
-| 다른 OEM 의 Android 16 | **미측정.** 두 참조 기기가 모두 Samsung 이다 — 범위 밖이 아니라 **진짜 미해결** |
+| 다른 OEM 의 Android 16 | **미측정, 그리고 잴 수단이 없다.** 미지원이라는 뜻이 아니다 — 확인해 주지 못한다는 뜻이다 (아래) |
 
 > ✅ **SoC 벤더·커널 축은 닫혔다.** 두 기기는 SoC 벤더가 다르고 커널도 6.1-android14 대 6.6-android15 로 갈리는데, **zygote 차단 syscall 239개 집합이 완전히 동일하다**([§A6](01-platform-facts.md)). 수용 78종, 호환성 폭 96/96, 슈퍼바이저 12/12, `path_traps=0 syscall_stops=0` 도 모두 같다.
 >
-> ⚠️ **OEM 축은 닫히지 않았다 — 두 기기 다 Samsung 이다.** zygote allowlist 는 SoC 벤더가 아니라 **OEM 이 빌드한 플랫폼 이미지 안의 bionic** 에서 온다. 그러므로 이 실측이 닫은 것은 정확히 SoC·커널이고, **다른 OEM 의 Android 16 기기는 진짜 미측정**이다(범위 결정으로 닫힌 항목이 아니다). 다음 기기의 우선순위가 그것이다.
+> ⚠️ **OEM 축은 재지 못했고, 앞으로도 못 잰다 — 두 기기 다 Samsung 이다.** zygote allowlist 는 SoC 벤더가 아니라 **OEM 이 빌드한 플랫폼 이미지 안의 bionic** 에서 오므로, 이 실측이 닫은 것은 정확히 **SoC·커널 축**이다.
+>
+> **이것은 Android 12~15 와 성격이 다르다.** 릴리스 축은 **변한다는 것이 확인된** 축이다(allowlist 가 android12 365줄 → android16 392줄로 자랐다) — 그래서 외삽을 거부하고 지원 범위에서 뺐다. OEM 축은 **변한다는 증거가 없는** 축이다: `SECCOMP_ALLOWLIST_*.TXT` 는 AOSP bionic 이 배포하고, OEM 이 그것을 고친 사례를 우리는 알지 못한다. 다만 **모르는 것은 잰 것이 아니다.**
+>
+> 그래서 다른 OEM 을 **미지원이라고 적지 않는다** — 안 된다고 잰 적이 없기 때문이다. **된다고도 적지 않는다** — 된다고 잰 적도 없기 때문이다. 정확한 진술은 **"Samsung 2대에서 검증했고, 다른 OEM 은 우리가 확인해 주지 못한다"** 이다. 그 기기에서의 판단 재료는 `alr doctor` 의 스윕이며, `scripts/diff-sweep.sh` 로 [`docs/evidence/sweeps/`](evidence/sweeps/) 와 비교하면 표가 그 폰을 설명하는지 사용자가 직접 확인할 수 있다.
 >
 > 🚫 **Android 릴리스 축은 재지 않기로 했다 — 미해결이 아니라 범위 결정이다**([ADR 0007](adr/0007-android-16-only.md)).
 > 이 설계의 근간인 zygote seccomp allowlist 는 **릴리스마다 커졌다**(android12 365줄 → android16 392줄). 두 기기가 갈린 축(SoC 벤더·커널)은 전부 무관했는데 **정작 allowlist 가 실제로 따라가는 축은 고정된 채였다.** 즉 실측 결과는 "SoC 벤더·커널은 상관없다" 의 강한 증거이지 **"Android 12 에서도 될 것" 의 증거가 아니다.** 그리고 그 증거를 만들 계획이 없으므로, 지원한다고 적지 않는다.
@@ -48,16 +52,16 @@
 | G5 | `node`, `npm`, `codex`가 실사용 가능 | `alr run codex --version`, `npm ci` 성공 |
 | G6 | 실패가 **조용하지 않음** | 모든 실패는 안정적 `reason=` 코드로 분류 |
 
-**현재 상태 (2026-08-02, MediaTek arm64, `uid=10297 Seccomp=2 untrusted_app_27`)**
+**현재 상태 (2026-08-03, 참조 기기 2대 — MediaTek `uid=10297` / Snapdragon 8 Elite `uid=10447`, 둘 다 `Seccomp=2 untrusted_app_27`)**
 
 | G | 상태 | 근거 |
 |---|---|---|
 | G1 | **MEASURED 달성** | 스톡 Ubuntu 24.04.4 base, glibc 2.39 무패치 부팅. glibc 재빌드 0회 |
 | G2 | **MEASURED 달성** | 아무것도 없는 상태에서 `alr install --with git` **2분 27초**, `git version 2.43.0`. `openssh-client` 포함 전 패키지 `ii` ([M10](evidence/2026-08-02-m10-apt-install-git.md)) |
 | G3 | **MEASURED 달성** | 수용 테스트가 매 실행 `path_traps=0 syscall_stops=0` 보고 |
-| G4 | **MEASURED 달성** | proot-distro 대비 `git status` 34.8× — 단, §4의 인용 주의사항 필독 |
+| G4 | **MEASURED 달성** | proot-distro 대비 `git status` **25.8×** (양쪽 git 2.53.0 동일, 워밍업 후 — [M19 §6.1](evidence/2026-08-03-m19-snapdragon.md)). 34.8× 는 git 빌드가 셋 다 달랐던 M8 수치라 인용하지 않는다 |
 | G5 | **부분 달성** | `node`/`npm` 은 동적 링크라 경로 가상화가 적용된다 — `npm ci` 실측 proot-distro 대비 **3.12×** ([M12](evidence/2026-08-03-m12-spawn-resolver.md)). **`codex` 는 정적 링크라 `LD_PRELOAD` 가 닿지 않는다** — 실행은 되지만 경로 가상화 없이 Android 파일시스템을 본다(아래 주석) |
-| G6 | 진행 중 | `reason=` 코드 체계는 동작. 전수 분류는 미완 |
+| G6 | **미달성** | `die()` 가 `reason=` 을 내지만 호출은 10곳뿐이고, `alr.c` 의 나머지 stderr 실패 경로 23곳에는 코드가 없다. **이를 검사하는 수용 항목도 없다** — 즉 회귀도 잡히지 않는다. v1 목표 중 유일하게 못 지킨 항목이다 |
 
 > ⚠️ **`codex --version` 이 통과한다는 것을 "codex 가 게스트 안에서 동작한다" 로 읽지 말 것.** 배포되는 codex 바이너리는 `INTERP` 프로그램 헤더도 `NEEDED` 항목도 없는 **정적 링크**(269 MB, ET_EXEC)다. `LD_PRELOAD` 는 원리적으로 닿지 않으므로 codex 의 모든 경로 연산은 rootfs 가 아니라 Android 파일시스템으로 간다. 실제로 시작할 때마다 `could not create PATH aliases: Read-only file system` 을 낸다 — 그 경로가 Android 의 읽기 전용 루트로 샌 증거다. codex 는 그 실패를 치명적으로 다루지 않아 계속 진행할 뿐이다.
 >
