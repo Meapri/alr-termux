@@ -391,7 +391,16 @@ per-syscall 비용은 없지만 **per-exec 비용은 있다**: execve마다 DSO 
 
 → **지금 실제로 하는 일**: `alr install --with codex`가 `<rootfs>/root/.codex/config.toml`에 `sandbox_mode = "danger-full-access"`를 쓰고, `alr: NOTE codex sandbox disabled; alr is not a security boundary`를 출력한다 ([`src/cli/alr.c`](../src/cli/alr.c) `with_codex()`).
 
-→ **`PENDING_DEVICE`: 그 철자가 맞는지는 아직 확인되지 않았다.** 기기에서 `codex --help`(또는 `codex config`) 출력을 받아 이 버전이 실제로 받는 값과 대조한 기록이 없다. 소스의 주석도 그렇게 적혀 있다. 값이 틀리면 codex는 조용히 기본 샌드박스로 뜨고, 그건 "동작하지 않는다"가 아니라 **"이해할 수 없는 권한 오류로 실패한다"**로 나타난다.
+→ **일부 실측됨, 결론은 여전히 `PENDING_DEVICE`.** 2026-08-04 에 기기에서 `codex --help` 를 받았다(codex-cli 0.146.0):
+```
+  -s, --sandbox <SANDBOX_MODE>
+          [possible values: read-only, workspace-write, danger-full-access]
+      --dangerously-bypass-approvals-and-sandbox
+  Examples: - `-c 'sandbox_permissions=["disk-full-read-access"]'`
+```
+**값** `danger-full-access` 는 확인됐다. **CLI 플래그**는 `--sandbox` 다. 그러나 우리가 파일에 쓰는 **설정 키 이름** `sandbox_mode` 는 도움말이 뒷받침하지 않는다 — 도움말이 `-c` 예시로 보여 주는 설정 키는 `sandbox_permissions` 다.
+
+**그리고 그 파일을 codex 가 읽기는 하는지는 여전히 미결이다.** 판정을 시도했으나 실패했다: 일부러 망가뜨린 TOML 을 두 위치 어느 쪽에 놓아도 `codex --version` 은 불평 없이 떴다. 그래서 "읽고 무시한다" 와 "애초에 읽지 않는다" 를 가르지 못한다. codex 는 정적 링크라 `$HOME` 이 Android 쪽으로 새고(codex 자신의 `could not create PATH aliases: Read-only file system` 경고가 그 신호다), [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 G5 밖이다. **판정 방법**: 설정 값이 실제로 걸렸는지를 codex 의 동작으로 확인해야 한다 — 버전 출력이 아니라, 샌드박스가 막을 명령을 실행시켜 보는 것.
   - 함께 확인해야 할 것: **그 파일을 codex가 읽기는 하는가.** `alr`은 게스트 환경에 `HOME=/root`를 넣는데(`alr.c`), codex는 후킹되지 않으므로 `/root`를 rootfs가 아니라 **Android 루트** 기준으로 푼다. 그렇다면 우리가 쓴 config에 도달하지 못한다. 이것은 두 사실(위 2번의 무후킹 + `HOME=/root`)로부터의 추론이고 **UNVERIFIED**다 — 관찰로 확정한 적이 없다.
   - **무엇이 이것을 끝내는가**: 기기에서 `codex --help` 출력 1회, 그리고 codex가 실제로 여는 config 경로 1회. 후자는 `ALR_LOG`로는 보이지 않는다(preload를 안 타므로) — `strace -f`나 codex 자체 진단이 필요하다.
   - **무엇이 막고 있는가**: 기기 세션. 기술적 장애물은 없다.
@@ -533,7 +542,24 @@ naked 함수 + named section + `__start_`/`__stop_` 바운드 심볼 구성은 �
 | P8 | `posix_openpt`/`grantpt`/`unlockpt` | 실패 → PTY 에뮬레이션 필요 (예상 밖) |
 | P9 | `open("/dev/full")` | `EACCES` 기대 → 에뮬레이션 활성화 |
 | P10 | `getrandom`, `memfd_create` 가용성 | 차단 → **크게 실패**, 폴백 없음 |
-| ~~P11~~ | `svc #0` 스캔: raw syscall 발행 바이너리 탐지 | **미구현.** 설계만 있고 `doctor.c` 에 없다 |
-| ~~P12~~ | 살아 있는 자손 수 vs phantom 한도 32 | **미구현.** 설계만 있고 `doctor.c` 에 없다 |
+| P11 | `svc #0` 스캔: raw syscall 발행 바이너리 탐지 | `alr doctor --scan <바이너리>`. 0 → PASS, 그 외 → WARN |
+| P12 | 살아 있는 자손 수 vs phantom 한도 32 | 40개 fork 후 생존 수. 40 미만 → WARN |
 
-> ⚠️ P11·P12 는 이 표에 오래 있었지만 **한 번도 구현되지 않았다**(실측 2026-08-03). 다른 문서가 "P1~P12 를 전부 실행한다" 고 적고 예시 출력까지 보여 주고 있었다. 구현하거나 내리거나 둘 중 하나여야 하며, 그때까지 여기 취소선으로 남긴다.
+> ✅ **P11·P12 구현됨 — 2026-08-04.** 이 표에 오래 설계로만 있었고 다른 문서는 "P1~P12 를 전부 실행한다" 고 적으며 예시 출력까지 보여 주고 있었다.
+>
+> **P11 이 왜 `--scan` 을 요구하는가.** 스캔할 대상이 있어야 답이 있다. 인자가 없으면 `SKIP` 이고, 그건 검사가 아니므로 수용 시험이 **항상 인자를 준다** — 세 갈래를 각각 밟는 세 개의 결정적 대상으로:
+>
+> | 대상 | 결과 (`MEASURED` 2026-08-04) |
+> |---|---|
+> | `/usr/bin/git` (동적 C) | dynamic, 3,884,492 exec bytes, **0** `svc #0` → PASS |
+> | `ld-linux-aarch64.so.1` | **STATIC** (PT_INTERP 없음) → WARN |
+> | `codex` 0.146.0 (정적 musl Rust) | **STATIC**, 263,228,576 exec bytes, **684** `svc #0` → WARN |
+> | `libc.so.6` (대조) | dynamic, 1,678,737 exec bytes, **517** `svc #0` |
+>
+> aarch64 `svc #0` 은 `0xd4000001` 이고 명령어는 4바이트 정렬이라 **정렬된 워드만 본다** — 데이터에 우연히 같은 바이트열이 어긋난 오프셋에 있어도 잡히지 않는다. `PT_LOAD` 중 `PF_X` 세그먼트만, 64 KiB 씩 나눠 읽는다(codex 는 269 MB 다).
+>
+> **숫자를 읽는 법이 출력에 함께 나온다.** libc 자체는 정의상 `svc` 로 가득하므로 libc 를 스캔한 수는 아무 뜻이 없다. 정상적인 동적 실행파일은 **0** 이다. 0 이 아닌 동적 실행파일은 그 호출들만큼 인터포저를 우회하고 있다는 뜻이다. 정적 실행파일은 개수와 **무관하게** 이미 진 싸움이다 — `LD_PRELOAD` 가 아예 로드되지 않는다.
+>
+> 이건 기존 `reason=unhooked-static-binary` 보다 정확하다. 그건 **정적 링크를 프록시로** 쓰기 때문에 동적으로 링크된 Go·rustix 바이너리를 통째로 놓치고, libc 만 부르는 정적 C 바이너리를 문제인 것처럼 표시한다.
+>
+> **P12 는 `MEASURED` 2026-08-04, SM-X236N: 40/40 생존 → PASS.** 이 기기에서는 phantom killer 가 40개까지 작동하지 않는다. 좀비를 생존으로 세지 않도록 `kill(pid,0)` 이 아니라 `waitpid(WNOHANG)` 으로 센다 — phantom 에 죽은 자식은 수확 전까지 좀비이고 `kill(pid,0)` 은 좀비에게 성공하므로, 8개를 죽인 기기에서 40 생존을 보고했을 것이다.

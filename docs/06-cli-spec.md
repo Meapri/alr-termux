@@ -146,13 +146,18 @@ alr doctor — device capability report
     439  faccessat2           → emulate -ENOSYS
     ... (총 N개, 에뮬레이션 테이블에 없던 것 M개는 ⚠️ 로 표시)
 
-  rootfs scan                                       [P11]
-    raw svc sites outside libc/ld.so: 3 binaries
-      /usr/bin/gh          (Go — 경로 가상화 미적용, 동작 불가할 수 있음)
-      ...
+  raw-syscall sweep                                 [P11]
+    (아래는 지어낸 예시가 아니라 `MEASURED` 2026-08-04, SM-X236N)
+      .../usr/bin/cargo                              39 svc
+      .../usr/bin/fzf                                38 svc
+      .../usr/bin/rg                                  4 svc
+      .../usr/lib/go-1.22/bin/go            STATIC,  38 svc
+      .../usr/lib/go-1.22/pkg/tool/linux_arm64/asm  STATIC, 36 svc
+      ... and 20 more (showing 20)
+    745 executables scanned, 40 issue their own syscalls or are static -> WARN
 
   process budget                                    [P12]
-    live descendants 1 / phantom limit 32
+    live descendants 40 of 40 / phantom limit 32 -> PASS
 
   VERDICT: READY   (link2symlink=on, devfull_emu=on)
 ```
@@ -167,7 +172,7 @@ alr doctor — device capability report
 | `WARN` | 사용자가 알아야 함 | **P0 미지원 Android 릴리스**, P11 Go 바이너리, P12 프로세스 예산 |
 | `INVALID` | 측정 결과를 신뢰할 수 없음 | P1 permissive 디바이스 |
 
-**`INVALID`면 `alr bench`가 결과에 무효 표시를 붙인다** ([00-product.md §6.6](00-product.md)).
+**`INVALID`면 벤치마크 결과에 무효 표시가 붙는다** ([00-product.md §6.6](00-product.md)). 실제로 그 판정을 내리는 것은 `alr bench`(존재하지 않는다 — §1 참조)가 아니라 [`tests/device/bench.sh`](../tests/device/bench.sh) 자신의 유효성 게이트다: uid ≥ 10000 이고 `Seccomp: 2` 가 아니면 **숫자를 내지 않고 거부한다.** 무효 표시를 붙이는 것보다 낫다 — 표시가 붙은 숫자는 결국 인용된다.
 
 ### 3.3 P2 (syscall 스윕) 구현 주의
 

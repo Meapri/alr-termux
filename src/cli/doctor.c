@@ -20,9 +20,11 @@
 #define _GNU_SOURCE
 #endif
 #include <errno.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <sched.h>
 #include <signal.h>
+#include <time.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -553,6 +555,247 @@ static void probe_devices(void)
 
 /* ── emit the supervisor's emulation table ──────────────────────────────── */
 
+
+/* ── P11: raw-syscall scan ──────────────────────────────────────────────
+ *
+ * The single biggest compatibility limit this project has (ADR 0006): a binary
+ * that issues `svc #0` inline instead of calling libc is invisible to
+ * LD_PRELOAD, so NONE of its paths are virtualized.  Go binaries do it always,
+ * Rust's rustix backend does it, and Ubuntu 26.04's uutils coreutils does it --
+ * which is why 26.04 is not a v1 target.
+ *
+ * Until now the only signal was `reason=unhooked-static-binary`, which fires on
+ * static linkage.  That is a PROXY: it catches codex (static musl) and misses a
+ * dynamically-linked Go or rustix binary entirely, and it flags a static C
+ * binary that only ever calls libc as though it were a problem.  This looks for
+ * the instruction itself.
+ *
+ * aarch64 `svc #0` is 0xd4000001, and instructions are 4-byte aligned, so this
+ * is exact rather than a heuristic byte search -- no false hits from data that
+ * happens to contain the pattern at an odd offset.
+ *
+ * READ THE COUNT CORRECTLY, which is why the output says so much:
+ *   - libc.so itself is FULL of svc, by definition.  Scanning it means nothing.
+ *   - a normal dynamic executable has ZERO: it calls into libc.
+ *   - a dynamic executable with a nonzero count is doing some of its own
+ *     syscalls -- those specific paths are unvirtualized.
+ *   - a STATIC executable will always be nonzero and is already lost.
+ */
+static int svc_scan(const char *path, long *n_out, int *is_static, long *bytes)
+{
+    unsigned char eh[64], ph[56];
+    unsigned long phoff;
+    unsigned short phnum, phentsize;
+    int fd, i, interp = 0;
+    long total = 0, scanned = 0;
+
+    *n_out = 0; *is_static = 0; *bytes = 0;
+    if ((fd = open(path, O_RDONLY)) < 0) return -1;
+    if (read(fd, eh, sizeof eh) != (ssize_t)sizeof eh ||
+        memcmp(eh, "\177ELF", 4) != 0 || eh[4] != 2) { close(fd); return -2; }
+    if (eh[18] != 0xb7 || eh[19] != 0x00) { close(fd); return -3; }  /* EM_AARCH64 */
+
+    memcpy(&phoff, eh + 32, 8);
+    memcpy(&phentsize, eh + 54, 2);
+    memcpy(&phnum, eh + 56, 2);
+    if (phentsize < sizeof ph) { close(fd); return -2; }
+
+    for (i = 0; i < (int)phnum; i++) {
+        unsigned int type, flags;
+        unsigned long off, filesz;
+        if (pread(fd, ph, sizeof ph, (off_t)(phoff + (unsigned long)i * phentsize))
+            != (ssize_t)sizeof ph) break;
+        memcpy(&type, ph, 4);
+        memcpy(&flags, ph + 4, 4);
+        memcpy(&off, ph + 8, 8);
+        memcpy(&filesz, ph + 32, 8);
+        if (type == 3) { interp = 1; continue; }            /* PT_INTERP */
+        if (type != 1 || !(flags & 1)) continue;            /* PT_LOAD + PF_X */
+
+        {   /* Chunked, and 4-byte aligned within the chunk: codex is 269 MB and
+             * a whole-segment read would be a 269 MB allocation. */
+            static unsigned char buf[1 << 16];
+            unsigned long pos = 0;
+            while (pos < filesz) {
+                size_t want = filesz - pos > sizeof buf ? sizeof buf : filesz - pos;
+                ssize_t got = pread(fd, buf, want, (off_t)(off + pos));
+                size_t k;
+                if (got <= 0) break;
+                for (k = 0; k + 4 <= (size_t)got; k += 4)
+                    if (buf[k] == 0x01 && buf[k+1] == 0x00 &&
+                        buf[k+2] == 0x00 && buf[k+3] == 0xd4) total++;
+                scanned += got;
+                pos += (unsigned long)got;
+            }
+        }
+    }
+    close(fd);
+    *n_out = total; *is_static = !interp; *bytes = scanned;
+    return 0;
+}
+
+/* Shared libraries are excluded from a sweep, and only from a sweep.
+ *
+ * docs/06 §3.1 words it as "raw svc sites outside libc/ld.so", and the reason
+ * is that a library full of svc is not news -- libc's whole job is to issue
+ * them.  What the user wants out of a sweep is the EXECUTABLES that bypass it.
+ *
+ * By name, because ET_DYN cannot tell a PIE executable from a shared object
+ * and every modern distro binary is ET_DYN.  Naming is the rule that actually
+ * holds in a Debian tree, and getting it wrong only ever hides a library. */
+static int is_shared_object(const char *name)
+{
+    const char *dot = strstr(name, ".so");
+    if (!dot) return 0;
+    if (dot[3] != '\0' && dot[3] != '.') return 0;      /* .so or .so.N */
+    return !strncmp(name, "lib", 3) || !strncmp(name, "ld-", 3);
+}
+
+/* Returns the number of offenders found; prints at most `budget` of them so a
+ * rootfs full of Go binaries does not bury the rest of the report. */
+static int sweep_dir(const char *dir, int depth, int *shown, int budget,
+                     long *files)
+{
+    DIR *d = opendir(dir);
+    struct dirent *e;
+    int found = 0;
+
+    if (!d || depth > 12) { if (d) closedir(d); return 0; }
+    while ((e = readdir(d)) != NULL) {
+        char path[4096];
+        struct stat st;
+        long n, bytes;
+        int stat_ic;
+
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        if (snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >= (int)sizeof path)
+            continue;
+        if (lstat(path, &st) != 0) continue;
+        if (S_ISLNK(st.st_mode)) continue;            /* the target is visited once */
+        if (S_ISDIR(st.st_mode)) {
+            found += sweep_dir(path, depth + 1, shown, budget, files);
+            continue;
+        }
+        if (!S_ISREG(st.st_mode) || !(st.st_mode & 0111)) continue;
+        if (is_shared_object(e->d_name)) continue;
+        if (svc_scan(path, &n, &stat_ic, &bytes) != 0) continue;
+        (*files)++;
+        if (n == 0 && !stat_ic) continue;
+        found++;
+        if (*shown < budget) {
+            printf("        %-52s %s%ld svc\n", path,
+                   stat_ic ? "STATIC, " : "", n);
+            (*shown)++;
+        }
+    }
+    closedir(d);
+    return found;
+}
+
+static void probe_rawsyscall(const char *path)
+{
+    long n = 0, bytes = 0;
+    int st = 0, rc;
+    struct stat sb;
+
+    if (path && stat(path, &sb) == 0 && S_ISDIR(sb.st_mode)) {
+        int shown = 0, found;
+        long files = 0;
+        printf("  [P11] raw-syscall sweep of %s\n", path);
+        found = sweep_dir(path, 0, &shown, 20, &files);
+        if (found > shown)
+            printf("        ... and %d more (showing %d)\n", found - shown, shown);
+        counts[found == 0 ? G_PASS : G_WARN]++;
+        printf("        %ld executables scanned, %d issue their own syscalls "
+               "or are static -> %s\n", files, found, found ? "WARN" : "PASS");
+        printf("        Shared libraries are excluded: libc is FULL of `svc` by\n"
+               "        definition, and a sweep that counted it would say nothing.\n");
+        if (found)
+            printf("        !! Those binaries' paths are ANDROID's, not the guest's\n"
+                   "           (ADR 0006).  Static ones do not load LD_PRELOAD at all.\n");
+        return;
+    }
+
+    if (!path) {
+        counts[G_EXPECTED]++;
+        printf("  [P11] raw-syscall (`svc #0`) scan -> SKIP -> EXPECTED\n"
+               "        pass a binary OR a rootfs to scan:\n"
+               "          alr doctor --scan /path/to/binary\n"
+               "          alr doctor --scan <rootfs>          (sweeps it)\n"
+               "        (ADR 0006: an inline-syscall binary is invisible to\n"
+               "        LD_PRELOAD, so none of its paths are virtualized)\n");
+        return;
+    }
+    rc = svc_scan(path, &n, &st, &bytes);
+    if (rc < 0) {
+        counts[G_WARN]++;
+        printf("  [P11] raw-syscall scan of %s -> %s -> WARN\n", path,
+               rc == -1 ? strerror(errno)
+                        : rc == -3 ? "not an aarch64 ELF" : "not a 64-bit ELF");
+        return;
+    }
+    counts[n == 0 ? G_PASS : G_WARN]++;
+    printf("  [P11] raw-syscall scan of %s\n"
+           "        %s, %ld exec bytes, %ld `svc #0` -> %s\n",
+           path, st ? "STATIC (no PT_INTERP)" : "dynamic", bytes, n,
+           n == 0 ? "PASS" : "WARN");
+    if (st)
+        printf("        !! Static: LD_PRELOAD is not loaded AT ALL for this\n"
+               "           binary, independently of the count above.\n");
+    else if (n > 0)
+        printf("        !! Dynamic but issues its own syscalls: those specific\n"
+               "           calls bypass the interposer.  Go, and Rust built on\n"
+               "           rustix, do this.  Paths in those calls are ANDROID's.\n");
+    else
+        printf("        Calls libc for everything -- fully virtualized.\n");
+    printf("        NOTE scanning libc.so itself would count thousands and mean\n"
+           "        nothing; this is only meaningful on an executable.\n");
+}
+
+/* ── P12: phantom process limit ─────────────────────────────────────────
+ *
+ * Android 12+ kills an app's descendants past a cap (32 by default) --
+ * settings_enable_monitor_phantom_procs.  A build job or a shell pipeline can
+ * exceed that, and the kill looks like an unexplained SIGKILL, so the number
+ * belongs in a capability report.
+ *
+ * Measured, not read from settings: the setting can be toggled per device and
+ * per OEM, and what matters is what actually survives here. */
+static void probe_phantom(void)
+{
+    enum { N = 40 };
+    pid_t kids[N];
+    int i, alive = 0;
+    struct timespec ts = { 0, 400 * 1000 * 1000 };
+
+    for (i = 0; i < N; i++) {
+        kids[i] = fork();
+        if (kids[i] == 0) { alarm(5); pause(); _exit(0); }
+        if (kids[i] < 0) { kids[i] = -1; break; }
+    }
+    nanosleep(&ts, NULL);
+    for (i = 0; i < N; i++) {
+        if (kids[i] <= 0) continue;
+        /* WNOHANG first: a phantom-killed child is a zombie until reaped, and
+         * kill(pid,0) succeeds on a zombie -- counting those would report 40
+         * survivors on a device that killed 8. */
+        if (waitpid(kids[i], NULL, WNOHANG) == 0) alive++;
+    }
+    for (i = 0; i < N; i++) {
+        if (kids[i] <= 0) continue;
+        kill(kids[i], SIGKILL);
+        waitpid(kids[i], NULL, 0);
+    }
+
+    counts[alive >= N ? G_PASS : G_WARN]++;
+    printf("  [P12] live descendants %d of %d / phantom limit 32 -> %s\n",
+           alive, N, alive >= N ? "PASS" : "WARN");
+    if (alive < N)
+        printf("        !! Android's phantom-process killer is active (cap is\n"
+               "           32 by default).  A parallel build past that limit\n"
+               "           loses processes to an unexplained SIGKILL.\n");
+}
+
 static void emit_table(void)
 {
     long nr;
@@ -588,8 +831,9 @@ static void emit_table(void)
 int main(int argc, char **argv)
 {
     const char *dir = getenv("TMPDIR");
+    const char *scan = NULL;
     struct utsname u;
-    int measurable;
+    int measurable, ai;
 
     /* argv[1] is the probe DIRECTORY, and it used to be taken unconditionally.
      * docs/06-cli-spec.md documents `alr doctor [--json] [--full]`, neither of
@@ -604,23 +848,29 @@ int main(int argc, char **argv)
      * "design dead" is the most alarming thing this tool can say, and it said
      * it because of an unimplemented flag.  Refuse unknown options instead:
      * an honest "I do not have that flag" beats a diagnosis that is wrong. */
-    if (argc > 1 && argv[1][0] == '-') {
-        if (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
-            printf("usage: alr-doctor [probe-dir]\n"
-                   "  probe-dir  where to create scratch files (default $TMPDIR)\n"
+    for (ai = 1; ai < argc; ai++) {
+        if (!strcmp(argv[ai], "-h") || !strcmp(argv[ai], "--help")) {
+            printf("usage: alr-doctor [probe-dir] [--scan <binary>]\n"
+                   "  probe-dir     where to create scratch files (default $TMPDIR)\n"
+                   "  --scan <path> P11: count inline `svc #0`.  A file scans that\n"
+                   "                file; a DIRECTORY sweeps it for executables that\n"
+                   "                bypass libc (shared libraries excluded)\n"
                    "\nNo other options exist.  Output is a human-readable report;\n"
                    "there is no --json.\n");
             return 0;
         }
-        fprintf(stderr,
-                "alr-doctor: unknown option '%s'\n"
-                "  reason=doctor-unknown-option\n"
-                "  This tool takes an optional probe DIRECTORY and no flags.\n"
-                "  (docs may mention --json/--full; they are not implemented.)\n",
-                argv[1]);
-        return 2;
+        if (!strcmp(argv[ai], "--scan") && ai + 1 < argc) { scan = argv[++ai]; continue; }
+        if (argv[ai][0] == '-') {
+            fprintf(stderr,
+                    "alr-doctor: unknown option '%s'\n"
+                    "  reason=doctor-unknown-option\n"
+                    "  This tool takes an optional probe DIRECTORY and --scan.\n"
+                    "  (docs may mention --json/--full; they are not implemented.)\n",
+                    argv[ai]);
+            return 2;
+        }
+        dir = argv[ai];
     }
-    if (argc > 1) dir = argv[1];
     if (!dir) dir = ".";
 
     uname(&u);
@@ -649,6 +899,9 @@ int main(int argc, char **argv)
     probe_devices();
     printf("\n  namespaces\n");
     probe_userns();
+    printf("\n  process and binary limits\n");
+    probe_rawsyscall(scan);
+    probe_phantom();
 
     emit_table();
 

@@ -71,6 +71,7 @@ accept)
     "${SSH[@]}" "cd ~/$REMOTE && \
         clang $CFLAGS_DEV -Isrc/common -Isrc/supervisor -o alr \
               src/cli/alr.c src/cli/alr_resolvd.c src/common/alr_exec_rule.c src/common/alr_elf.c src/supervisor/alr_supervisor.c && \
+        clang $CFLAGS_DEV -o alr-doctor src/cli/doctor.c && \
         chmod +x tests/device/acceptance.sh && \
         ${ALR_DISTROS_DIR:+ALR_ROOT_DIR=\$HOME/$ALR_DISTROS_DIR }ALR=./alr tests/device/acceptance.sh"
     ;;

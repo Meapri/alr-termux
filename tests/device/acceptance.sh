@@ -354,6 +354,56 @@ else
     emit "PRELOAD PATH COVERAGE" SKIP "no libc6-dev in the guest"
 fi
 
+# ── alr doctor P11/P12 (docs/01-platform-facts.md §D) ───────────────────
+# P11 and P12 sat in that table as design for the life of the project and were
+# never implemented; other documents meanwhile claimed "P1~P12 를 전부 실행한다"
+# and showed example output.  Now that they exist they get exercised, because
+# P11's default is SKIP -- a probe that only ever reports SKIP has never been
+# shown to distinguish anything.
+#
+# Three deterministic targets, all always present, one per branch:
+#   /bin/true    dynamic C, calls libc for everything            -> 0, PASS
+#   ld.so        has no PT_INTERP, so it reads as STATIC, and a
+#                loader necessarily issues its own syscalls      -> STATIC
+#   libc.so.6    the note in the output exists because of this one
+if [ -x ./alr-doctor ]; then
+    ckc "DOCTOR P11 DYNAMIC CLEAN" '0 `svc #0` -> PASS' \
+        ./alr-doctor --scan "$R/bin/true"
+    ckc "DOCTOR P11 STATIC FLAGGED" "STATIC (no PT_INTERP)" \
+        ./alr-doctor --scan "$R/lib/ld-linux-aarch64.so.1"
+    # The scan must READ the file, not merely accept the argument: a stub that
+    # printed PASS for everything would pass the first check above.
+    ckc "DOCTOR P11 COUNTS NONZERO" "-> WARN" \
+        ./alr-doctor --scan "$R/lib/ld-linux-aarch64.so.1"
+    ckc "DOCTOR P11 REJECTS NON ELF" "not a 64-bit ELF" \
+        ./alr-doctor --scan "$R/etc/os-release"
+    # A DIRECTORY sweeps -- docs/06 §3.1's shape, and the one that answers the
+    # question a user has ("which of my binaries will not be virtualized?").
+    # Scoped to /usr/lib/go-1.22 when present because the Go toolchain is the
+    # canonical offender: static, and every one of them issues its own
+    # syscalls.  Sweeping the whole rootfs takes ~18 s and belongs in doctor,
+    # not in a suite that runs on every change.
+    if [ -d "$R/usr/lib/go-1.22/bin" ]; then
+        ckc "DOCTOR P11 SWEEPS DIR" "STATIC," ./alr-doctor --scan "$R/usr/lib/go-1.22/bin"
+    else
+        # /usr/bin always exists; assert the sweep RAN and counted, which is
+        # the part a stub could not fake.
+        ckc "DOCTOR P11 SWEEPS DIR" "executables scanned" ./alr-doctor --scan "$R/usr/bin"
+    fi
+    # Shared libraries must stay OUT of a sweep: /usr/lib/aarch64-linux-gnu is
+    # nothing but libc and friends, each stuffed with svc, and a sweep that
+    # counted them would report every rootfs as broken.
+    ckc "DOCTOR P11 SKIPS LIBS" "0 issue their own syscalls or are static" \
+        ./alr-doctor --scan "$R/usr/lib/aarch64-linux-gnu"
+    ckc "DOCTOR P12 PHANTOM" "live descendants" ./alr-doctor
+else
+    for n in "DOCTOR P11 DYNAMIC CLEAN" "DOCTOR P11 STATIC FLAGGED" \
+             "DOCTOR P11 COUNTS NONZERO" "DOCTOR P11 REJECTS NON ELF" \
+             "DOCTOR P12 PHANTOM"; do
+        emit "$n" SKIP "alr-doctor not built"
+    done
+fi
+
 # ── alr config (docs/06-cli-spec.md §2) ─────────────────────────────────
 # Run under a scratch HOME so this never touches the user's real
 # ~/.alr/config.toml -- a test suite that edits the machine it measures is not

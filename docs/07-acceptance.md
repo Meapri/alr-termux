@@ -209,6 +209,13 @@ ALR CODEX LINKAGE:                KNOWN_FAIL:static-unhooked
 ALR PTY TMUX:                     PASS
 PRELOAD UNIX SOCKET PATH:         PASS   ← bind/connect 재작성 + 추상 소켓 통과 (대조)
 PRELOAD PATH COVERAGE:            PASS   ← xattr/inotify/pathconf/getsockname/nftw/setmntent/glob
+DOCTOR P11 DYNAMIC CLEAN:         PASS   ← /bin/true: 0 svc
+DOCTOR P11 STATIC FLAGGED:        PASS   ← ld.so: PT_INTERP 없음
+DOCTOR P11 COUNTS NONZERO:        PASS   ← 인자만 받고 PASS 찍는 스텁을 거른다
+DOCTOR P11 REJECTS NON ELF:       PASS
+DOCTOR P11 SWEEPS DIR:            PASS   ← 디렉토리를 주면 스윕한다 (docs/06 §3.1)
+DOCTOR P11 SKIPS LIBS:            PASS   ← libc 로 가득한 디렉토리에서 0건
+DOCTOR P12 PHANTOM:               PASS   40/40 생존
 CLI CONFIG GET DEFAULT:           PASS
 CLI CONFIG SET REPORTS NEW:       PASS   ← 쓴 뒤의 값을 보고하는가 (cfg() 메모이즈)
 CLI CONFIG AFFECTS RUNTIME:       PASS   ← 설정이 `alr run id -u` 를 0 으로 바꾸는가
@@ -294,12 +301,13 @@ ALR MEDIATION INVARIANT:          PASS   path_traps=0 syscall_stops=0  MEASURED
 > 실측에서 지켜졌다** — 격차의 본체가 바로 이것이다. 1,704 − 49 = 1,655 ms 를 경로 호출 9,912회로
 > 나누면 호출당 ≈167 µs 이고, alr 쪽 경로 계층 전체는 ≈40 µs 다.
 >
-> **남은 두 줄이 왜 `PENDING_DEVICE`인가.** 둘 다 기기가 아니라 **하네스가 없어서**다: `alr bench`는
-> 아직 없고 `bench/`에는 `microbench/rw_cost.c`와 `notif_cost.c`뿐이다. §4.3-1이 A/B 실측 전에는
-> 이 값을 `PENDING_DEVICE`로 두라고 규정하므로 그대로 둔다.
-> - `NODE COLD`: 판정 방법은 `npm ci`와 같다 — **같은 node 바이너리를 양쪽 게스트에 복사**하고
->   `node -e 0`을 3회 워밍업 + 5회 측정, 중앙값. 그렇게 하지 않으면 배포판 차이를 재게 된다.
-> - `EXEC THROUGHPUT`: exec/s 자체는 잰 적이 없다. 위 `PROC STARTUP` 10.9×가 저해상도 프록시일 뿐이다.
+> **이 두 줄은 더 이상 `PENDING_DEVICE`가 아니다.** 하네스가 없어서 미측정이었고
+> ([`tests/device/bench.sh`](../tests/device/bench.sh) 가 그때는 없었다), 이제 있다. `dev-push.sh
+> bench-ab` 가 돌리고 [`bench/regression_gate.py`](../bench/regression_gate.py) 가 기기별 baseline
+> 과 대조한다. 방법은 그때 적어 둔 그대로다 — **같은 node 바이너리를 양쪽 게스트에 복사**하고
+> `node -e 0`을 워밍업 뒤 5회 측정, 중앙값. 그렇게 하지 않으면 배포판 차이를 재게 된다.
+> `MEASURED` 2026-08-04, SM-X236N: `NODE COLD 7.20x` (alr 46 / proot 331 ms),
+> `EXEC THROUGHPUT 312 exec/s` (proot 118).
 >   다만 [RISKS R5](RISKS.md)의 **판정 기준은 이미 충족됐다** — "`npm ci` 비율이 1.5배 미만이면
 >   히어로 벤치에서 내린다"였고 실측은 3.12×다. 즉 exec 오버헤드가 히어로를 잡아먹지 않았다.
 
