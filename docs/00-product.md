@@ -10,7 +10,7 @@
 
 | | 상태 |
 |---|---|
-| MediaTek MT8775, Android 16 (커널 `6.1.145-android14`) | **검증됨** — 수용 158, 폭 96/96 |
+| MediaTek MT8775, Android 16 (커널 `6.1.145-android14`) | **검증됨** — 수용 164, 폭 96/96 |
 | Qualcomm Snapdragon 8 Elite SM8750, Android 16 (커널 `6.6.98-android15`) | **검증됨** — 폭 96/96, 차단 syscall 집합 동일 ([M19](evidence/2026-08-03-m19-snapdragon.md)) |
 | Android 12 / 13 / 14 / 15 (모든 기기) | **범위 밖 — 지원하지 않는다.** 검증 계획 없음 ([ADR 0007](adr/0007-android-16-only.md)) |
 | 다른 OEM 의 Android 16 | **미측정, 그리고 잴 수단이 없다.** 미지원이라는 뜻이 아니다 — 확인해 주지 못한다는 뜻이다 (아래) |
@@ -70,7 +70,7 @@
 >
 > 이것은 [RISKS](RISKS.md) 의 "정적 링크 게스트 바이너리" 한계에 해당하며, `node`/`npm` 에는 적용되지 않는다(둘 다 동적 링크라 정상적으로 가상화된다). 수용 테스트가 `ALR CODEX LINKAGE` 로 이 상태를 추적한다.
 
-수용 테스트: **PASS=158 FAIL=0 KNOWN_FAIL=1 SKIP=0**. 호스트 게이트 **10/10**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). 남은 `KNOWN_FAIL` 은 `/dev/full` **하나뿐**이며 미구현이 아니라 **의도된 비목표**다([RISKS](RISKS.md)). 즉 수용 시험의 `KNOWN_FAIL` 은 이제 전부 "안 할 일"이고 "못 한 일"은 0이다 — codex 정적 링크는 [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 비목표가 되어 관찰 라인(`ALR CODEX LINKAGE`)으로 남는다.
+수용 테스트: **PASS=164 FAIL=0 KNOWN_FAIL=1 SKIP=0**. 호스트 게이트 **10/10**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). 남은 `KNOWN_FAIL` 은 `/dev/full` **하나뿐**이며 미구현이 아니라 **의도된 비목표**다([RISKS](RISKS.md)). 즉 수용 시험의 `KNOWN_FAIL` 은 이제 전부 "안 할 일"이고 "못 한 일"은 0이다 — codex 정적 링크는 [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 비목표가 되어 관찰 라인(`ALR CODEX LINKAGE`)으로 남는다.
 
 **호환성 폭 (§4 포지셔닝의 근거): 큐레이션된 96개 Ubuntu noble 패키지 중 설치 96/96, 실행 96/96** ([M11](evidence/2026-08-02-m11-breadth.md), [M14](evidence/2026-08-03-m14-ioctl-php.md)).
 

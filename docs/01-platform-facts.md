@@ -391,16 +391,18 @@ per-syscall 비용은 없지만 **per-exec 비용은 있다**: execve마다 DSO 
 
 → **지금 실제로 하는 일**: `alr install --with codex`가 `<rootfs>/root/.codex/config.toml`에 `sandbox_mode = "danger-full-access"`를 쓰고, `alr: NOTE codex sandbox disabled; alr is not a security boundary`를 출력한다 ([`src/cli/alr.c`](../src/cli/alr.c) `with_codex()`).
 
-→ **일부 실측됨, 결론은 여전히 `PENDING_DEVICE`.** 2026-08-04 에 기기에서 `codex --help` 를 받았다(codex-cli 0.146.0):
-```
-  -s, --sandbox <SANDBOX_MODE>
-          [possible values: read-only, workspace-write, danger-full-access]
-      --dangerously-bypass-approvals-and-sandbox
-  Examples: - `-c 'sandbox_permissions=["disk-full-read-access"]'`
-```
-**값** `danger-full-access` 는 확인됐다. **CLI 플래그**는 `--sandbox` 다. 그러나 우리가 파일에 쓰는 **설정 키 이름** `sandbox_mode` 는 도움말이 뒷받침하지 않는다 — 도움말이 `-c` 예시로 보여 주는 설정 키는 `sandbox_permissions` 다.
+→ **실측으로 닫혔다 (2026-08-04).** 두 질문 다 답이 나왔다.
 
-**그리고 그 파일을 codex 가 읽기는 하는지는 여전히 미결이다.** 판정을 시도했으나 실패했다: 일부러 망가뜨린 TOML 을 두 위치 어느 쪽에 놓아도 `codex --version` 은 불평 없이 떴다. 그래서 "읽고 무시한다" 와 "애초에 읽지 않는다" 를 가르지 못한다. codex 는 정적 링크라 `$HOME` 이 Android 쪽으로 새고(codex 자신의 `could not create PATH aliases: Read-only file system` 경고가 그 신호다), [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 G5 밖이다. **판정 방법**: 설정 값이 실제로 걸렸는지를 codex 의 동작으로 확인해야 한다 — 버전 출력이 아니라, 샌드박스가 막을 명령을 실행시켜 보는 것.
+**철자**: `codex --help`(codex-cli 0.146.0)가 CLI 플래그 `-s, --sandbox <SANDBOX_MODE>` 와 값 `read-only | workspace-write | danger-full-access` 를 보여 준다. 설정 키 `sandbox_mode` 는 `codex doctor` 가 되읽어 확인해 준다 — `sandbox_mode = "danger-full-access"` 를 쓴 뒤 doctor 가 `sandbox  unrestricted fs + enabled network` 로 보고한다.
+
+**codex 가 그 파일을 읽는가**: **읽는다 — 단, `HOME` 이 호스트 형식일 때만.** 판정 방법은 센티널이었다. `<R>/root/.codex/config.toml` 에 `model = "alr-sentinel-model"` 을 넣고 `codex doctor` 의 Configuration 절을 본다:
+
+| `HOME` | doctor 보고 |
+|---|---|
+| `/root` (게스트 형식, 이전 동작) | `model <default>` — **설정을 못 읽음** |
+| `<R>/root` (호스트 형식) | `model alr-sentinel-model`, `config.toml parse ok` |
+
+당연한 결과다. codex 는 정적이라 `/root` 를 **Android 의** `/root` 로 푼다 — 읽을 것도 없고 쓸 수도 없다(그래서 `could not create PATH aliases: Read-only file system` 이 나왔다). `alr` 은 이제 정적 타깃에 호스트 형식 환경을 준다([ADR 0008 보론](adr/0008-static-guest-binaries-non-goal.md)).
   - 함께 확인해야 할 것: **그 파일을 codex가 읽기는 하는가.** `alr`은 게스트 환경에 `HOME=/root`를 넣는데(`alr.c`), codex는 후킹되지 않으므로 `/root`를 rootfs가 아니라 **Android 루트** 기준으로 푼다. 그렇다면 우리가 쓴 config에 도달하지 못한다. 이것은 두 사실(위 2번의 무후킹 + `HOME=/root`)로부터의 추론이고 **UNVERIFIED**다 — 관찰로 확정한 적이 없다.
   - **무엇이 이것을 끝내는가**: 기기에서 `codex --help` 출력 1회, 그리고 codex가 실제로 여는 config 경로 1회. 후자는 `ALR_LOG`로는 보이지 않는다(preload를 안 타므로) — `strace -f`나 codex 자체 진단이 필요하다.
   - **무엇이 막고 있는가**: 기기 세션. 기술적 장애물은 없다.

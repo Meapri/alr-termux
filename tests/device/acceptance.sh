@@ -425,6 +425,54 @@ else
     emit "RESOLV SERVICE PORT" SKIP "no libc6-dev in the guest"
 fi
 
+# ── static guests: host-form env + host-side wrappers (ADR 0008) ────────
+# A static binary has no PT_INTERP, so LD_PRELOAD never loads and nothing it
+# does is rewritten.  The answer is not to hook it -- that is impossible -- but
+# to hand it an environment in which its UNREWRITTEN paths are already right:
+# host-form HOME/TMPDIR/PWD, no LD_* (which its children would inherit and
+# choke on), and a PATH of host-side wrappers that re-enter `alr run`.
+_hb="$R/usr/lib/alr/hostbin"
+if [ -d "$_hb" ]; then
+    n=$(ls "$_hb" 2>/dev/null | wc -l)
+    [ "${n:-0}" -ge 20 ] && emit "CLI HOSTBIN PRESENT" PASS "$n wrappers" \
+                         || emit "CLI HOSTBIN PRESENT" FAIL "only ${n:-0}"
+    # The wrapper must reach the GUEST's copy, not a host one: git is 2.43.0 in
+    # the rootfs and Termux ships no git at all, so the version is the proof.
+    ckc "CLI HOSTBIN RUNS GUEST TOOL" "git version 2." "$_hb/git" --version
+    # And it must work with NOTHING inherited -- every child of a static binary
+    # starts from that binary's environment, not the harness's.  The first
+    # version read ALR_ROOT_DIR from the environment and silently resolved
+    # against the default rootfs.
+    ckc "CLI HOSTBIN SELF CONTAINED" "git version 2." \
+        env -i PATH=/data/data/com.termux/files/usr/bin "$_hb/git" --version
+else
+    emit "CLI HOSTBIN PRESENT" FAIL "no $_hb; run alr update-components"
+    emit "CLI HOSTBIN RUNS GUEST TOOL" SKIP "no hostbin"
+    emit "CLI HOSTBIN SELF CONTAINED" SKIP "no hostbin"
+fi
+
+# codex is the reason this exists: 269 MB of static musl Rust, the exact shape
+# ADR 0008 called unhookable.  `codex doctor` is the oracle because it reports
+# whether codex can actually USE the tools it needs -- and it needs a nested
+# `alr run` to reach them, which only works because an inner alr detects it is
+# already traced and inherits the outer supervisor instead of failing to start
+# a second one (MEASURED before that: pids=0, rc=126).
+if [ -x "$R/usr/local/bin/codex" ]; then
+    ckc "ALR CODEX FINDS GUEST GIT"  "git version 2."  \
+        $ALR run /usr/local/bin/codex doctor
+    ckc "ALR CODEX FINDS GUEST RG"   "ripgrep "        \
+        $ALR run /usr/local/bin/codex doctor
+    # Its config/state land in the rootfs, which only happens when HOME is
+    # host-form.  With the guest form codex wrote to ANDROID's /root and
+    # reported "could not create PATH aliases: Read-only file system".
+    ckc "ALR CODEX CONFIG IN ROOTFS" "config       loaded" \
+        $ALR run /usr/local/bin/codex doctor
+else
+    emit "ALR CODEX FINDS GUEST GIT"  SKIP "codex not installed"
+    emit "ALR CODEX FINDS GUEST RG"   SKIP "codex not installed"
+    emit "ALR CODEX CONFIG IN ROOTFS" SKIP "codex not installed"
+fi
+
 # ── alr doctor P11/P12 (docs/01-platform-facts.md §D) ───────────────────
 # P11 and P12 sat in that table as design for the life of the project and were
 # never implemented; other documents meanwhile claimed "P1~P12 를 전부 실행한다"
@@ -594,8 +642,20 @@ $ALR run /bin/bash -c 'rm -f /tmp/alrsl /tmp/alrsy /usr/local/bin/alrsl' >/dev/n
 # the preload.  ubuntu-base has 20; /usr/bin/awk -> /etc/alternatives/awk was
 # among them, which is why ucf, locales, mercurial and php died with
 # "awk: not found".  `alr install` relativizes them after extraction.
+#
+# Scoped to the IMAGE, not to runtime state.  A guest program may legitimately
+# create an absolute symlink at runtime, and for a STATIC guest the host form
+# is the correct one -- codex writes
+#   <R>/root/.codex/tmp/arg0/codex-arg0XXXX/apply_patch
+#     -> <R>/usr/local/bin/codex
+# so it can re-exec itself under a different argv[0].  Those still resolve for
+# a dynamic guest too, because rw() passes an already-under-root path through
+# unchanged.  Counting them made this check fail the moment codex started
+# working, which is the opposite of what it is for.
 n=$(find "$R" -type l -lname '/*' 2>/dev/null \
-    | grep -vE '/(proc|sys|dev)/' | wc -l | tr -d ' ')
+    | grep -vE '/(proc|sys|dev)/' \
+    | grep -vE "^$R/(tmp|var/tmp|run)/" \
+    | grep -vE "^$R/root/\\." | wc -l | tr -d ' ')
 [ "${n:-1}" -eq 0 ] && emit "ROOTFS NO ABSOLUTE SYMLINKS" PASS \
                     || emit "ROOTFS NO ABSOLUTE SYMLINKS" FAIL "$n broken link(s)"
 # Run an awk PROGRAM rather than matching its --version banner.  The banner was

@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (2026-08-03).
+**Superseded in part (2026-08-04) — [§보론](#보론-2026-08-04--후킹하지-않고-동작시킨다) 을 먼저 읽을 것.**
+원래 결정(2026-08-03, Accepted)의 전제는 옳다: 정적 바이너리를 **후킹하는 것은 불가능**하다. 틀린 것은 거기서 끌어낸 결론이다 — *후킹할 수 없으면 쓸모없다*. 후킹하지 않고도 동작시킬 수 있고, 실제로 동작한다.
 
 ## Context
 
@@ -77,3 +78,41 @@ Accepted (2026-08-03).
 
 - **codex 가 동적 링크 빌드를 배포하면** 자동으로 다시 후보가 된다. 수용 시험의 `ALR CODEX LINKAGE` 가 `NEEDED` 유무를 매번 확인하므로, 그날 라인이 바뀌어 알려 준다 — 가정이 아니라 계측으로.
 - **arm64 SUD 를 지원하는 커널이 흔해지면** ADR 0006 과 함께 다시 본다.
+
+
+## 보론 (2026-08-04) — 후킹하지 않고 동작시킨다
+
+이 ADR 은 *"`LD_PRELOAD` 가 닿지 않는다 → 경로가 Android 로 간다 → 못 쓴다"* 로 끝났다. 두 번째 화살표가 비약이었다.
+
+**경로를 재작성할 수 없다면, 재작성이 필요 없게 만들면 된다.** 정적 바이너리의 경로는 실제 루트에서 풀린다. 그러니 게스트 형식이 아니라 **호스트 형식 환경**을 주면, 재작성 없이도 정확히 같은 파일에 도달한다. 동적 바이너리에 게스트 경로를 주는 것의 **정확한 쌍대**다.
+
+`MEASURED` 2026-08-04, codex-cli 0.146.0 (정적 musl, 269 MB), SM-X236N:
+
+| | 이전 (게스트 형식 env) | 이후 (호스트 형식 env) |
+|---|---|---|
+| 시작 | `could not create PATH aliases: Read-only file system` | 경고 없음 |
+| `codex doctor` config | `model <default>` — 설정 파일을 못 읽음 | `config loaded`, `config.toml parse ok` |
+| git | `git not found` | **`git version 2.43.0`** (게스트의 것) |
+| ripgrep | `search command could not be verified` | **`ripgrep 14.1.0 (system, rg)`** (게스트의 것) |
+| 셸 명령 | 불가 | `bash -lc "pwd; cat /etc/os-release"` → `/root`, `Ubuntu 24.04.4 LTS` |
+
+### 세 가지가 필요했고, 셋 다 실측으로 찾았다
+
+**(1) `LD_PRELOAD`·`LD_LIBRARY_PATH` 를 주지 않는다.** 정적 바이너리에는 쓸모없을 뿐 아니라 **해롭다** — 그것이 띄우는 모든 자식이 상속하는데, 그 자식은 Android 바이너리이고 bionic 링커는 glibc 오브젝트를 거부한다:
+```
+CANNOT LINK EXECUTABLE "$PREFIX/bin/bash":
+  library "libc.so.6" not found: needed by libalr_preload.so
+```
+**정적 게스트가 띄우려던 모든 프로세스가 main() 전에 죽고 있었다.**
+
+**(2) 호스트 측 래퍼(`<R>/usr/lib/alr/hostbin/`).** 정적 바이너리는 게스트 프로그램을 exec 할 수 없다 — 게스트 바이너리의 `PT_INTERP` 는 Android 에 없는 로더를 가리키고, 그게 `ADR0002 BARE EXECVE FAILS` 가 재는 바로 그 사실이다. exec 할 수 **있는** 것은 Android 바이너리다. 그래서 각 래퍼는 인터프리터가 Termux 의 bash 인 스크립트이고, `alr run` 으로 다시 들어가 게스트 도구를 정상 경로로 띄운다.
+
+**(3) 중첩 `alr run` 은 바깥 supervisor 를 물려받는다.** 프로세스에는 tracer 가 **하나**뿐이라 안쪽 alr 은 두 번째 supervisor 를 띄울 수 없다 — 그리고 띄울 필요도 없다. 바깥 supervisor 가 이미 자손 트리 전체의 SIGSYS 를 구제한다. 고치기 전 실측: `alr supervisor: pids=0 ... elapsed_ms=0`, `rc=126`. `already_traced()` 가 `/proc/self/status` 의 `TracerPid` 를 읽어 자동으로 판별한다.
+
+### 무엇이 바뀌고 무엇이 그대로인가
+
+**그대로**: 후킹은 여전히 불가능하다. codex 안에서 일어나는 경로 연산은 재작성되지 않으며, 앞으로도 그렇다. `ALR CODEX LINKAGE` 는 계속 그 사실을 감시한다. G5 의 정의도 그대로 `node`/`npm` 이다.
+
+**바뀜**: *"정적 바이너리는 지원 대상 워크로드가 아니다"* 는 **너무 넓었다.** 정확한 문장은 **"정적 바이너리는 후킹 대상이 아니다"** 이고, 후킹되지 않는 채로도 유용하게 동작한다. `alr install --with codex` 는 이제 실제로 쓸 수 있는 codex 를 남긴다.
+
+**여전히 안 되는 것**: codex 의 자체 샌드박스(`codex sandbox`)는 bubblewrap 을 요구하고 Android 에는 없다. `sandbox_mode = "danger-full-access"` 로 끄고 쓴다 — `alr` 은 애초에 보안 경계가 아니다([00 §1](../00-product.md)).

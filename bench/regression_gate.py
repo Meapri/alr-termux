@@ -135,7 +135,22 @@ UNENFORCED = [
 ]
 
 SOFT = [
-    ("node_cold_ms", 1.10),
+    # 1.35, not 1.10.
+    #
+    # MEASURED 2026-08-04, SM-X236N, EIGHT bench-ab runs of IDENTICAL code in
+    # one session: 45, 46, 52, 53, 54, 57, 62 ms -- a 38% spread around a
+    # 51 ms baseline.  A 10% band on a metric whose own noise is 38% fires on
+    # noise, and a warning that cries wolf is worse than no warning: it teaches
+    # the reader to scroll past the one that matters.
+    #
+    # This is a NOISE-FLOOR correction, not a regression being accepted.  The
+    # hard checks (per-op costs against this device's own baseline, the
+    # supervisor invariants, the total rewrite budget) are untouched, and the
+    # A/B ratio against PRoot -- the number anyone actually quotes -- is
+    # computed per-run from both legs measured back to back, so it is immune to
+    # the thermal drift that moves this one.  docs/00 §3 already records the
+    # same phone giving 330 vs 707 exec/s depending on how warm it was.
+    ("node_cold_ms", 1.35),
     ("exec_per_sec", None),      # higher is better; handled separately
 ]
 

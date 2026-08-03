@@ -205,7 +205,13 @@ ALR NODE FS STAT:                 PASS   ← libuv raw syscall 회귀 테스트
 ALR NODE IO_URING SURVIVE:        PASS   (Node 22)  ← SIGSYS 구제 회귀 테스트
 ALR NPM CI:                        미측정 — 손으로만 쟀다([M12 §4](evidence/2026-08-03-m12-spawn-resolver.md)) — 하네스에 없다
 ALR CODEX VERSION:                PASS   ← "바이너리가 뜬다"는 뜻뿐이다. 아래 주석
-ALR CODEX LINKAGE:                KNOWN_FAIL:static-unhooked
+ALR CODEX LINKAGE:                PASS   ← 정적임을 확인하는 관찰 라인 (후킹은 여전히 불가)
+CLI HOSTBIN PRESENT:              PASS   29 wrappers
+CLI HOSTBIN RUNS GUEST TOOL:      PASS   ← 래퍼가 게스트 git 2.43.0 을 부른다
+CLI HOSTBIN SELF CONTAINED:       PASS   ← env -i 로도 동작 (자식은 아무것도 물려받지 않는다)
+ALR CODEX FINDS GUEST GIT:        PASS   git version 2.43.0
+ALR CODEX FINDS GUEST RG:         PASS   ripgrep 14.1.0
+ALR CODEX CONFIG IN ROOTFS:       PASS   config loaded
 ALR PTY TMUX:                     PASS
 PRELOAD UNIX SOCKET PATH:         PASS   ← bind/connect 재작성 + 추상 소켓 통과 (대조)
 PRELOAD PATH COVERAGE:            PASS   ← xattr/inotify/pathconf/getsockname/nftw/setmntent/glob
@@ -247,16 +253,20 @@ CLI GUEST USERDB LS:              PASS   ← ls -ld /root → "alr alr" (이전:
 > Android 에 `/etc` 가 있어서(`/system/etc` 심링크) **틀린 디렉토리를 보면서 둘 다 ok 를 보고했다.**
 > 이틀 사이 두 번째 유령 통과다 — 첫 번째는 `connect()` 에서 멈춰 `accept(2)` 가 막힌 것을 놓쳤다.
 
-> **`ALR CODEX VERSION: PASS`가 뜻하지 않는 것.** codex 0.146.0은 **정적 링크 musl 바이너리**다
-> (`ET_EXEC`, `INTERP` 없음, `NEEDED` 없음, 269 MB). `LD_PRELOAD`가 원리적으로 닿지 않아 preload 가
-> **아예 로드되지 않고**(`ALR_LOG=2`에서 `alr preload:` 0줄, 대조로 `git`은 1줄), 경로 가상화가
-> 하나도 걸리지 않는다 — codex 의 모든 경로 연산은 rootfs 가 아니라 Android 파일시스템으로 간다
-> ([M12 §8](evidence/2026-08-03-m12-spawn-resolver.md)). 그래서 이 `PASS`는 "실행된다"이지
-> **"게스트 안에서 동작한다"가 아니다.** 이 상태를 추적하려고 `ALR CODEX LINKAGE`를 넣었고, 향후
-> 동적 빌드로 바뀌면 자동으로 `PASS`가 된다. [RISKS R7](RISKS.md)의 질문("codex 의 `rustix`
-> raw-syscall 백엔드가 인터포저를 무력화하는가")은 **YES 이며, 우려보다 나쁘다** — raw syscall 이전에
-> 링크 단계에서 이미 닿지 않는다.
+> **`ALR CODEX VERSION: PASS` 가 뜻하는 것이 2026-08-04 에 바뀌었다.** codex 0.146.0 은 여전히
+> **정적 링크 musl 바이너리**이고(`ET_EXEC`, `INTERP` 없음, 269 MB), `LD_PRELOAD` 는 여전히 **로드조차
+> 되지 않는다.** 후킹은 원리적으로 불가능하고 앞으로도 그렇다 — `ALR CODEX LINKAGE` 가 그 사실을 계속
+> 감시한다.
 >
+> **바뀐 것은 후킹이 필요 없게 만들었다는 것이다.** 정적 바이너리의 경로는 실제 루트에서 풀리므로,
+> 게스트 형식이 아니라 **호스트 형식 환경**을 주면 재작성 없이 같은 파일에 도달한다. 여기에 호스트 측
+> 래퍼(`<R>/usr/lib/alr/hostbin/`)를 PATH 에 놓아 게스트 도구를 부를 수 있게 하고, 중첩 `alr run` 이
+> 바깥 supervisor 를 물려받게 했다. 자세한 것은 [ADR 0008 보론](adr/0008-static-guest-binaries-non-goal.md).
+>
+> 그래서 이 `PASS` 는 이제 **"실행된다"** 를 넘어 **"게스트의 도구로 일한다"** 를 뜻한다 — 위의 세
+> `ALR CODEX FINDS/CONFIG` 줄이 그것을 각각 검사한다. `RISKS R7` 의 질문("codex 의 raw-syscall
+> 백엔드가 인터포저를 무력화하는가")의 답은 **여전히 YES** 다. 달라진 것은 그게 치명적이지 않다는 것이다.
+
 > **`ALR CODEX SANDBOX DISABLED`에는 상태 토큰을 붙이지 않는다.** [RISKS R8](RISKS.md)의 절반은
 > 끝났다 — `alr`의 `with_codex()`는 `$R/root/.codex/config.toml`에
 > `sandbox_mode = "danger-full-access"`를 쓰고 `alr: NOTE codex sandbox disabled; alr is not a
