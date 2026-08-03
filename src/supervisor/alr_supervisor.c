@@ -150,6 +150,37 @@ static const char *sigsys_name(long nr)
 /* ── SIGSYS handling ─────────────────────────────────────────────────── */
 
 /* Returns 1 if we emulated (caller continues with sig 0), 0 to pass through. */
+/* Syscalls that carry a PATH, used to split syscall stops into the two numbers
+ * docs/03-supervisor-spec.md §6 specifies.
+ *
+ * NOTE WHAT THIS IS NOT.  A first version counted these on the SIGSYS path,
+ * reasoning that a path syscall reaching the supervisor meant the preload had
+ * missed it.  That is wrong per the spec and wrong in fact: §6 says both
+ * counters mean "someone introduced PTRACE_SYSCALL", and a SIGSYS on e.g.
+ * chroot(2) is the KERNEL refusing a call whose path the preload rewrote
+ * perfectly well.  Counting it would have made the number actively
+ * misleading -- worse than the zero it replaced.
+ *
+ * aarch64 numbers. */
+static int is_path_syscall(long nr)
+{
+    switch (nr) {
+    case 34:  /* mkdirat      */ case 35:  /* unlinkat   */
+    case 36:  /* symlinkat    */ case 37:  /* linkat     */
+    case 38:  /* renameat     */ case 43:  /* statfs     */
+    case 44:  /* fstatfs      */ case 45:  /* truncate   */
+    case 48:  /* faccessat    */ case 49:  /* chdir      */
+    case 50:  /* chroot(path) */ case 51:  /* fchmod-at  */
+    case 53:  /* fchmodat     */ case 54:  /* fchownat   */
+    case 56:  /* openat       */ case 78:  /* readlinkat */
+    case 79:  /* newfstatat   */ case 259: /* renameat2  */
+    case 437: /* openat2      */ case 439: /* faccessat2 */
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static int handle_sigsys(struct sup *s, pid_t t)
 {
     siginfo_t si;
@@ -338,6 +369,43 @@ int alr_supervise(const struct alr_sup_opts *o, int *status_out,
 
         sig   = WSTOPSIG(status);
         event = (status >> 16) & 0xff;
+
+        /* THE INVARIANT THIS WHOLE DESIGN RESTS ON, actually counted.
+         *
+         * docs/07-acceptance.md §3 makes `syscall_stops == 0` the hardest gate
+         * in the repo -- "if that becomes non-zero somebody introduced
+         * PTRACE_SYSCALL and at that moment this product IS PRoot".  Until
+         * 2026-08-03 NOTHING INCREMENTED IT.  The field was declared, printed
+         * every run, and read by bench/regression_gate.py, and it was
+         * structurally zero: `grep -rn syscall_stops src/` found the struct
+         * member and the printf and no writer at all.  The gate that existed
+         * to make PTRACE_SYSCALL impossible to merge quietly could not see it.
+         *
+         * A syscall-enter/exit stop reaches us in one of two shapes:
+         *   SIGTRAP|0x80  when PTRACE_O_TRACESYSGOOD is set
+         *   bare SIGTRAP, event 0, from a tracee we already know
+         * We set neither TRACESYSGOOD nor PTRACE_SYSCALL, and the only bare
+         * SIGTRAPs we legitimately expect carry an event (fork/exec/exit,
+         * handled above) or are the startup SIGSTOP (SIGSTOP, not SIGTRAP).
+         * So either shape means someone put this process into syscall-stop
+         * mode.  Count it and say so loudly -- the number is the evidence for
+         * a claim the whole product is sold on. */
+        if (sig == (SIGTRAP | 0x80)
+            || (sig == SIGTRAP && !event && find(&s, t) >= 0
+                && s.st[find(&s, t)] != T_NEW)) {
+            unsigned long long r[ALR_NREGS];
+            struct iovec iv = { r, sizeof r };
+            long snr = -1;
+            if (st) st->syscall_stops++;
+            /* path_traps is the subset whose syscall carries a path (§6). */
+            if (ptrace(PTRACE_GETREGSET, t, NT_PRSTATUS, &iv) == 0) {
+                snr = (long)r[R_NR];
+                if (is_path_syscall(snr) && st) st->path_traps++;
+            }
+            slog(&s, 0, "alr: SYSCALL-STOP tid=%d sig=%d nr=%ld -- PTRACE_SYSCALL "
+                        "is in play; this is PRoot's model, not ours "
+                        "(docs/adr/0001)\n", (int)t, sig, snr);
+        }
 
         if (event) {
             if (event == PTRACE_EVENT_FORK || event == PTRACE_EVENT_VFORK

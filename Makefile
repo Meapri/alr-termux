@@ -157,6 +157,7 @@ check: test
 	@ZIG=$(ZIG) bash scripts/check-preload.sh
 	@bash scripts/check-docs.sh
 	@bash scripts/check-reasons.sh
+	@bash scripts/check-invariants.sh
 	@bench/regression_gate.py --self-test
 
 # --- release layout --------------------------------------------------------

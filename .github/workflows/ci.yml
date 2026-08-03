@@ -91,6 +91,11 @@ jobs:
       - name: reason= registry gate
         run: bash scripts/check-reasons.sh
 
+      # ADR 0001's invariant, the half CI can see.  The runtime counter for it
+      # needs a device; this catches the source change at commit time.
+      - name: PTRACE_SYSCALL invariant gate
+        run: bash scripts/check-invariants.sh
+
       # The scraper once answered node_cold_ms with the exec-throughput number
       # from the next line, and --update wrote it into the baseline as fact.  A
       # regex that matches the wrong thing looks exactly like one that works,
