@@ -42,14 +42,14 @@ TERMUX_PKG_MAINTAINER="@Meapri"
 # Keep in lockstep with src/common/alr_version.h -- that header is the single
 # source of truth and scripts/make-release.sh REFUSES to cut a release when this
 # line disagrees with it.
-TERMUX_PKG_VERSION="0.4.0"
+TERMUX_PKG_VERSION="0.4.1"
 
 TERMUX_PKG_SRCURL=https://github.com/Meapri/alr-termux/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz
 # NOTE these two hashes are the only values in the release path with no
 # automated cross-check: their URLs interpolate TERMUX_PKG_VERSION, so a
 # version bump silently repoints them while the old hashes stay.  Bump them in
 # the same commit, or set them back to PLACEHOLDER so the guard below fires.
-TERMUX_PKG_SHA256=PLACEHOLDER-fill-after-the-v0.4.0-release-job-publishes
+TERMUX_PKG_SHA256=PLACEHOLDER-fill-after-the-v0.4.1-release-job-publishes
 
 # Runtime dependencies, derived from what src/cli/alr.c actually execs or pipes
 # through popen() ON THE HOST.  These are not guesses:
@@ -95,14 +95,15 @@ _PRELOAD_TARBALL_URL="https://github.com/Meapri/alr-termux/releases/download/v${
 # From the SHA256SUMS the release job publishes, verified by downloading the
 # tarball and re-hashing it rather than trusting the paste.
 #
-# PLACEHOLDER between the version bump and the release: this hash CANNOT exist
-# before the release job runs, since it is the hash of what that job builds.
-# The recipe is designed for exactly this window -- _alr_refuse_placeholders()
-# above fails loudly at the top of a termux build rather than 200 lines in with
-# a confusing 404.  The alternative, leaving v0.3.0's hashes in place next to a
-# 0.4.0 version, points the URLs at 0.4.0 while the hashes still describe 0.3.0
-# and fails as a checksum mismatch nobody can interpret.
-_PRELOAD_TARBALL_SHA256="PLACEHOLDER-fill-after-the-v0.4.0-release-job-publishes"
+# Both hashes are PLACEHOLDER between the version bump and the release, because
+# neither can exist before the release job runs -- one is the hash of what that
+# job builds, the other the hash of the source tarball GitHub generates for the
+# tag.  _alr_refuse_placeholders() above covers that window: it fails loudly at
+# the top of a termux build rather than 200 lines in with a confusing 404.
+# Carrying the previous release's hashes over instead points both URLs at the
+# new version while the hashes still describe the old one, which fails as a
+# checksum mismatch nobody can interpret.
+_PRELOAD_TARBALL_SHA256="PLACEHOLDER-fill-after-the-v0.4.1-release-job-publishes"
 
 # Fail at the top rather than 200 lines into a build with a confusing 404.
 _alr_refuse_placeholders() {

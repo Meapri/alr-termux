@@ -89,6 +89,28 @@ build() { # build <n>  -> $TMP/<n>/libalr_preload.so
         bash scripts/build-preload.sh >"$TMP/build-$1.log" 2>&1
 }
 
+# build_elsewhere <n> -- same sources, DIFFERENT directory.
+#
+# build() above only varies the output path, so for the life of this gate it
+# proved determinism and nothing more.  The contract it prints is stronger:
+# "anyone can rebuild the same bytes from the same tag" -- across machines,
+# where the checkout is not at the same path.  That was FALSE and the gate
+# could not see it: v0.4.0's .so hashed a3f3ed7b on a laptop and 3b05ad6d in
+# CI from identical sources, 50,737 bytes apart, every one of them the
+# embedded build root.  Fixed with -ffile-prefix-map; this is the check that
+# would have caught it, and will catch the next thing that leaks an absolute
+# path (a __FILE__, a -I, an embedded compiler note).
+build_elsewhere() {
+    local d="$TMP/elsewhere/a-different-checkout-path"
+    mkdir -p "$d" || return 1
+    cp -R src scripts "$d/" || return 1
+    ( cd "$d" &&
+      ZIG_LOCAL_CACHE_DIR="$TMP/cache-$1/local" \
+      ZIG_GLOBAL_CACHE_DIR="$TMP/cache-$1/global" \
+      OUT="$TMP/$1/libalr_preload.so" \
+          bash scripts/build-preload.sh ) >"$TMP/build-$1.log" 2>&1
+}
+
 if build 1; then
     emit "PRELOAD BUILD" PASS "$(sha256 "$TMP/1/libalr_preload.so" | cut -c1-16)…"
 else
@@ -181,12 +203,15 @@ fi
 # bug report quoting it is only actionable if anyone can rebuild the same
 # bytes from the same tag.
 h1=$(sha256 "$SO")
-if build 2; then
+if build_elsewhere 2; then
     h2=$(sha256 "$TMP/2/libalr_preload.so")
     if [ "$h1" = "$h2" ]; then
-        emit "PRELOAD REPRODUCIBLE" PASS "sha256=$h1"
+        emit "PRELOAD REPRODUCIBLE" PASS "sha256=$h1 (rebuilt from another path)"
     else
         emit "PRELOAD REPRODUCIBLE" FAIL "build1=$h1 build2=$h2"
+        echo "    The second build ran from a different directory.  A"
+        echo "    difference here is almost always an embedded absolute path:"
+        echo "      strings <so> | grep \"\$PWD\""
     fi
 else
     emit "PRELOAD REPRODUCIBLE" FAIL "second build did not complete"

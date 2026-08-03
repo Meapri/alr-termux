@@ -51,6 +51,15 @@ mkdir -p "$(dirname "$OUT")"
     `# the checks is deliberate, so the diagnostic is suppressed rather than` \
     `# the code weakened. docs/04-preload-spec.md §1 mandates -Werror.` \
     -Wno-pointer-bool-conversion \
+    `# Reproducible ACROSS MACHINES, which is what the gate's contract says:` \
+    `# "a bug report quoting the sha256 is only actionable if anyone can` \
+    `# rebuild the same bytes from the same tag".  Without this the build` \
+    `# ROOT is embedded, and v0.4.0's .so built on a laptop hashed` \
+    `# a3f3ed7b... against CI's 3b05ad6d... from identical sources --` \
+    `# 50,737 differing bytes, all of them "/Users/naen/Git/Android on` \
+    `# Linux/alr-termux" vs "/home/runner/work/alr-termux/alr-termux".` \
+    `# -ffile-prefix-map covers debug info and __FILE__ together.` \
+    -ffile-prefix-map="$PWD"=. \
     -I src/common \
     ${ALR_CFLAGS_EXTRA:-} \
     -o "$OUT" $SRC
