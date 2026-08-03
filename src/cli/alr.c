@@ -1379,12 +1379,29 @@ static int shebang_resolve(const struct launch *L, char *host, size_t hostsz,
         return -1;
     }
     /* argv becomes [interp, (arg,) script, original args...]; the script keeps
-     * its GUEST path because that is what the program will see in argv. */
-    if (sb.has_arg && *npre < 4) pre[(*npre)++] = strdup(sb.arg);
-    if (*npre < 4) {
-        char *g = malloc(ALR_PBUF);
-        if (g) { snprintf(g, ALR_PBUF, "%s", host + L->root_len);
-                 pre[(*npre)++] = g; }
+     * its GUEST path because that is what the program will see in argv.
+     *
+     * PREPEND, do not append.  A nested shebang -- /tmp/s2 is "#!/tmp/s1" and
+     * /tmp/s1 is "#!/bin/sh" -- must end up as the kernel builds it:
+     *     /bin/sh /tmp/s1 /tmp/s2
+     * i.e. each level's script goes in FRONT of what deeper levels already
+     * contributed, because the outer script is the argument of the inner one.
+     * Appending produced "/bin/sh /tmp/s2 /tmp/s1", so sh read s2 as a shell
+     * script, treated its "#!" line as a comment, and exited 0 having printed
+     * NOTHING.  Silent and successful is the worst possible shape.
+     * MEASURED 2026-08-03: native Termux runs the same pair correctly, alr
+     * produced empty output with rc=0. */
+    {
+        int add = (sb.has_arg ? 1 : 0) + 1, i;
+        if (*npre + add <= 4) {
+            for (i = *npre - 1; i >= 0; i--) pre[i + add] = pre[i];
+            i = 0;
+            if (sb.has_arg) pre[i++] = strdup(sb.arg);
+            { char *g = malloc(ALR_PBUF);
+              if (g) snprintf(g, ALR_PBUF, "%s", host + L->root_len);
+              pre[i] = g; }
+            *npre += add;
+        }
     }
     snprintf(host, hostsz, "%s", interp_host);
     return shebang_resolve(L, host, hostsz, pre, npre, depth + 1);

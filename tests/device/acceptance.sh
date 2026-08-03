@@ -164,6 +164,45 @@ n=$($ALR run /usr/bin/git --version 2>&1 | grep -c 'unhooked-static-binary')
 [ "${n:-1}" -eq 0 ] && emit "CLI DYNAMIC NO FALSE WARN" PASS \
                     || emit "CLI DYNAMIC NO FALSE WARN" FAIL "warned on a dynamic binary"
 
+echo "── 워크로드 (docs/07 §2 이름들, 지금까지 러너가 없던 것) ──"
+# These names carried PASS in docs/07 §2 with nothing behind them.  Measuring
+# is better than de-tokenising: the names describe things we actually want.
+# ALR LDSO INVOKE means "alr invokes the GUEST loader" (ADR 0002).  Running
+# ld.so itself is not the way to see that -- it prints nothing through our own
+# loader invocation.  What proves it is that the guest's ldd reports the guest
+# glibc, i.e. the program was linked against the rootfs, not Termux's bionic.
+ckc "ALR LDSO INVOKE"    "Ubuntu GLIBC"  $ALR run /usr/bin/ldd --version
+ck  "ALR PIPELINE"       ok       $ALR run /bin/bash -c 'echo ok | /bin/cat | /usr/bin/head -1'
+ckc "ALR FAKEROOT IDENTITY" "uid=0" env ALR_FAKEROOT=1 $ALR run /usr/bin/id
+# NOT -qq: that is quiet by design and prints none of the lines this asserts.
+ckc "ALR APT UPDATE"     "ports.ubuntu.com" \
+    env ALR_FAKEROOT=1 $ALR run /usr/bin/apt-get update
+# The workload the copy fallback exists for -- ADR 0004's own test matrix opens
+# with it and it had never been run.
+$ALR run /bin/bash -c 'cd /tmp && rm -rf dpkgt && mkdir -p dpkgt/DEBIAN &&
+    printf "Package: alrtest\nVersion: 1\nArchitecture: all\nMaintainer: t\nDescription: t\n" \
+      > dpkgt/DEBIAN/control && dpkg-deb -b dpkgt /tmp/alrtest.deb' >/dev/null 2>&1
+ckc "ALR DPKG LOCAL INSTALL" "alrtest" \
+    env ALR_FAKEROOT=1 $ALR run /usr/bin/dpkg -i /tmp/alrtest.deb
+# git clone --local is the other hardlink-heavy path (ADR 0004).
+$ALR run /bin/bash -c 'rm -rf /tmp/gsrc /tmp/gdst && mkdir -p /tmp/gsrc && cd /tmp/gsrc &&
+    git init -q . && echo x > a && git add -A &&
+    git -c user.email=a@b -c user.name=c commit -qm i' >/dev/null 2>&1
+ckc "ALR GIT CLONE LOCAL" "done" \
+    $ALR run /usr/bin/git clone --local /tmp/gsrc /tmp/gdst
+# symlinkat's target must NOT be rewritten while its dirfd path is -- the
+# asymmetry docs/04 §5.3 calls out.
+ck  "PRELOAD SYMLINKAT ASYMMETRY" ../etc/os-release \
+    $ALR run /bin/bash -c 'rm -f /tmp/sla && ln -s ../etc/os-release /tmp/sla && readlink /tmp/sla'
+# A shebang chain whose interpreter is ITSELF a shebang script.  alr appended
+# each level's script path instead of prepending, so the final argv was
+# "/bin/sh /tmp/s2 /tmp/s1" instead of "/bin/sh /tmp/s1 /tmp/s2": sh read the
+# outer script, treated its "#!" line as a comment, and exited 0 printing
+# nothing.  Native Termux runs the same pair correctly.
+$ALR run /bin/bash -c 'printf "#!/bin/sh\necho deep-ok\n" > /tmp/s1 &&
+    printf "#!/tmp/s1\n" > /tmp/s2 && chmod +x /tmp/s1 /tmp/s2' >/dev/null 2>&1
+ck  "PRELOAD EXEC SHEBANG RECURSION" deep-ok  $ALR run /tmp/s2
+
 echo "── M4 경로 가상화 ──"
 ckc "PRELOAD GUEST ETC"          "Ubuntu 24.04" $ALR run /bin/cat /etc/os-release
 ck  "PRELOAD PROC SELF EXE"      /bin/readlink  $ALR run /bin/readlink /proc/self/exe
