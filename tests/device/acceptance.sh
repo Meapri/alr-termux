@@ -511,9 +511,26 @@ if $ALR run /usr/bin/test -f /usr/include/spawn.h >/dev/null 2>&1; then
 else
     emit "PRELOAD LINK IDENTITY NLINK" SKIP "no libc6-dev (spawn.h absent)"
 fi
-$ALR run /bin/bash -c 'ln /etc/os-release /tmp/l2s.$$ 2>&1 | head -1; :' 2>/dev/null \
-    | grep -qi 'denied\|not permitted' && emit "PRELOAD LINK2SYMLINK" KNOWN_FAIL:not-implemented \
-                                       || emit "PRELOAD LINK2SYMLINK" PASS
+# THIS CHECK COULD NOT FAIL.  It grepped ln's output for "denied|not
+# permitted" and emitted PASS when nothing matched -- but the preload's link()
+# falls back to copy_path()+lid_record() on EACCES/EPERM/EXDEV, so ln SUCCEEDS,
+# nothing ever matched, and PASS was unconditional.  It was inside the headline
+# number.
+#
+# What the fallback actually promises: ln succeeds, and the result has the same
+# CONTENT as the source.  Assert both, and read them from one guest invocation
+# so a boot failure cannot look like success.
+l2s=$($ALR run /bin/bash -c '
+        rm -f /tmp/l2s.probe
+        ln /etc/os-release /tmp/l2s.probe 2>/dev/null || { echo "rc-fail"; exit 0; }
+        cmp -s /etc/os-release /tmp/l2s.probe && echo "ok" || echo "content-differs"
+      ' 2>/dev/null | tail -1)
+case "$l2s" in
+    ok)              emit "PRELOAD LINK FALLBACK" PASS "ln succeeded, content identical";;
+    rc-fail)         emit "PRELOAD LINK FALLBACK" FAIL "ln failed; the copy fallback did not fire";;
+    content-differs) emit "PRELOAD LINK FALLBACK" FAIL "ln succeeded but the copy differs";;
+    *)               emit "PRELOAD LINK FALLBACK" FAIL "guest produced no answer: '$l2s'";;
+esac
 # Probe with a WRITE, not an open: `: < /dev/full` is O_RDONLY and would pass
 # on a /dev/zero redirect that never delivers ENOSPC -- exactly the shortcut
 # docs/04-preload-spec.md §12 forbids.  /dev/full is a deliberate non-goal
