@@ -362,6 +362,14 @@ def _run_decision(transcript, baseline):
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
                                      encoding="utf-8") as f:
         json.dump(baseline, f); bpath = f.name
+    # Stub build_facts: the decision test must depend ONLY on the transcript.
+    # Without this it passes locally and fails in CI, because CI has no
+    # build/libalr_preload.so, preload.glibc_verneed_max comes back ABSENT, and
+    # the "must PASS" scenario fails for a reason that has nothing to do with
+    # the decision being tested.  A self-test that reads ambient build state is
+    # testing the workspace, not the code.
+    global build_facts
+    saved_bf, build_facts = build_facts, lambda: ({"preload.glibc_verneed_max": "2.17"}, [])
     saved, BASELINE = BASELINE, bpath
     import io as _io, contextlib
     buf = _io.StringIO()
@@ -370,6 +378,7 @@ def _run_decision(transcript, baseline):
             rc = main_with(["--from", tpath])
     finally:
         BASELINE = saved
+        build_facts = saved_bf
         os.unlink(tpath); os.unlink(bpath)
     return rc, buf.getvalue()
 
