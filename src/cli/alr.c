@@ -1315,12 +1315,39 @@ static int shebang_resolve(const struct launch *L, char *host, size_t hostsz,
     int fd;
 
     if (depth > ALR_SHEBANG_MAX_DEPTH) { errno = ELOOP; return -1; }
+    char interp_probe[ALR_PBUF];
     fd = open(host, O_RDONLY);
     if (fd < 0) return -1;
     n = read(fd, head, sizeof head);
     ctx.fd = fd;
-    k = alr_classify(head, n < 0 ? 0 : (size_t)n, rd_pread, &ctx, &sb, NULL, 0);
+    /* The interp buffer is what MAKES the static/dynamic answer real.
+     * alr_elf.c gates the PT_INTERP walk on `pread && interp_out && interp_sz`,
+     * so passing NULL/0 -- as this did -- skips it and reports EVERY ELF as
+     * ALR_EXE_ELF_STATIC.  A first attempt at the unhooked-binary warning below
+     * fired on /usr/bin/git because of it. */
+    k = alr_classify(head, n < 0 ? 0 : (size_t)n, rd_pread, &ctx, &sb,
+                     interp_probe, sizeof interp_probe);
     close(fd);
+
+    /* Say it when the target cannot be hooked.
+     *
+     * alr_classify already knows -- ALR_EXE_ELF_STATIC is literally commented
+     * "no PT_INTERP -> unhookable" -- and until now that knowledge died here at
+     * every verbosity.  A static binary runs, so nothing looks wrong, while
+     * every path it touches goes to the ANDROID filesystem instead of the
+     * rootfs.  This is the one moment we can tell the user, and it is exactly
+     * the class ADR 0008 makes a non-goal.
+     *
+     * Only for the top-level target (depth 0): a shebang interpreter that is
+     * static is a different and much rarer thing, and warning inside the chain
+     * would fire on every script. */
+    if (k == ALR_EXE_ELF_STATIC && depth == 0)
+        fprintf(stderr,
+            "alr: NOTE %s is statically linked -- path virtualization does NOT\n"
+            "     apply to it.  It runs, but its paths resolve against Android,\n"
+            "     not the guest rootfs.\n"
+            "     reason=unhooked-static-binary  (docs/adr/0008-static-guest-binaries-non-goal.md)\n",
+            host);
 
     if (k != ALR_EXE_SHEBANG) return 0;      /* ELF (or unsupported): as-is */
 

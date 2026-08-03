@@ -39,7 +39,8 @@
 > **exec 는 Snapdragon 이 2배 빠르고**(proot 쪽도 함께 오르므로 기기 성능 차이다) **재작성 per-op 은 MediaTek 이 빠르다.** 배수가 MediaTek 에서 더 큰 것은 alr 이 빨라서가 아니라 **proot 가 더 느려서**다. 배수를 인용할 때는 기기를 함께 쓴다.
 - **호스트**: Termux **F-Droid / GitHub 빌드** (`targetSdkVersion=28`). Play Store 빌드는 **v1 미지원** (ADR 0005).
 - **게스트**: Ubuntu 24.04 (noble) arm64, glibc 2.39, `ports.ubuntu.com` 아카이브. Debian bookworm/trixie는 v1.1 목표.
-- **워크로드**: `git`, `node`(및 npm/npx), `codex`, `bash`, `apt`/`dpkg`, 일반 coreutils/빌드 툴체인.
+- **워크로드**: `git`, `node`(및 npm/npx), `bash`, `apt`/`dpkg`, 일반 coreutils/빌드 툴체인.
+  `codex` 는 **비목표**다 — 정적 링크라 경로 가상화가 원리적으로 닿지 않는다([ADR 0008](adr/0008-static-guest-binaries-non-goal.md)).
 
 ## 3. 목표 (Goals)
 
@@ -49,7 +50,7 @@
 | G2 | `apt install`이 게스트 안에서 동작 | `alr run apt-get install -y git` 성공 |
 | G3 | path syscall에 대해 **ptrace 왕복 0회** | `alr bench --trace-count` 가 `path_traps=0` 보고 |
 | G4 | `git status`(10k 파일)가 proot-distro 대비 명확히 빠름 | §4의 정직한 목표 배수 |
-| G5 | `node`, `npm`, `codex`가 실사용 가능 | `alr run codex --version`, `npm ci` 성공 |
+| G5 | `node`, `npm`이 실사용 가능 | `npm ci` 성공 ([ADR 0008](adr/0008-static-guest-binaries-non-goal.md): codex 는 비목표) |
 | G6 | 실패가 **조용하지 않음** | 모든 실패는 안정적 `reason=` 코드로 분류 |
 
 **현재 상태 (2026-08-03, 참조 기기 2대 — MediaTek `uid=10297` / Snapdragon 8 Elite `uid=10447`, 둘 다 `Seccomp=2 untrusted_app_27`)**
@@ -60,14 +61,16 @@
 | G2 | **MEASURED 달성** | 아무것도 없는 상태에서 `alr install --with git` **2분 27초**, `git version 2.43.0`. `openssh-client` 포함 전 패키지 `ii` ([M10](evidence/2026-08-02-m10-apt-install-git.md)) |
 | G3 | **MEASURED 달성** | 수용 테스트가 매 실행 `path_traps=0 syscall_stops=0` 보고 |
 | G4 | **MEASURED 달성** | proot-distro 대비 `git status` **25.8×** (양쪽 git 2.53.0 동일, 워밍업 후 — [M19 §6.1](evidence/2026-08-03-m19-snapdragon.md)). 34.8× 는 git 빌드가 셋 다 달랐던 M8 수치라 인용하지 않는다 |
-| G5 | **부분 달성** | `node`/`npm` 은 동적 링크라 경로 가상화가 적용된다 — `npm ci` 실측 proot-distro 대비 **3.12×** ([M12](evidence/2026-08-03-m12-spawn-resolver.md)). **`codex` 는 정적 링크라 `LD_PRELOAD` 가 닿지 않는다** — 실행은 되지만 경로 가상화 없이 Android 파일시스템을 본다(아래 주석) |
+| G5 | **MEASURED 달성** | `node`/`npm` 은 동적 링크라 경로 가상화가 적용된다 — `npm ci` 실측 proot-distro 대비 **3.12×** ([M12](evidence/2026-08-03-m12-spawn-resolver.md)). codex 는 [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 G5 에서 뺐다(정적 링크, 원리적으로 후킹 불가) |
 | G6 | **미달성** | `die()` 가 `reason=` 을 내지만 호출은 10곳뿐이고, `alr.c` 의 나머지 stderr 실패 경로 23곳에는 코드가 없다. **이를 검사하는 수용 항목도 없다** — 즉 회귀도 잡히지 않는다. v1 목표 중 유일하게 못 지킨 항목이다 |
 
-> ⚠️ **`codex --version` 이 통과한다는 것을 "codex 가 게스트 안에서 동작한다" 로 읽지 말 것.** 배포되는 codex 바이너리는 `INTERP` 프로그램 헤더도 `NEEDED` 항목도 없는 **정적 링크**(269 MB, ET_EXEC)다. `LD_PRELOAD` 는 원리적으로 닿지 않으므로 codex 의 모든 경로 연산은 rootfs 가 아니라 Android 파일시스템으로 간다. 실제로 시작할 때마다 `could not create PATH aliases: Read-only file system` 을 낸다 — 그 경로가 Android 의 읽기 전용 루트로 샌 증거다. codex 는 그 실패를 치명적으로 다루지 않아 계속 진행할 뿐이다.
+> ⚠️ **codex 는 비목표다**([ADR 0008](adr/0008-static-guest-binaries-non-goal.md)). `--with codex` 로 설치·실행은 되지만 **경로 가상화 없이 돈다.** 아래는 그 근거이며, `alr` 은 정적 ELF 를 실행할 때 한 줄로 경고한다.
+>
+> **`codex --version` 이 통과한다는 것을 "codex 가 게스트 안에서 동작한다" 로 읽지 말 것.** 배포되는 codex 바이너리는 `INTERP` 프로그램 헤더도 `NEEDED` 항목도 없는 **정적 링크**(269 MB, ET_EXEC)다. `LD_PRELOAD` 는 원리적으로 닿지 않으므로 codex 의 모든 경로 연산은 rootfs 가 아니라 Android 파일시스템으로 간다. 실제로 시작할 때마다 `could not create PATH aliases: Read-only file system` 을 낸다 — 그 경로가 Android 의 읽기 전용 루트로 샌 증거다. codex 는 그 실패를 치명적으로 다루지 않아 계속 진행할 뿐이다.
 >
 > 이것은 [RISKS](RISKS.md) 의 "정적 링크 게스트 바이너리" 한계에 해당하며, `node`/`npm` 에는 적용되지 않는다(둘 다 동적 링크라 정상적으로 가상화된다). 수용 테스트가 `ALR CODEX LINKAGE` 로 이 상태를 추적한다.
 
-수용 테스트: **PASS=78 FAIL=0 KNOWN_FAIL=2 SKIP=0**. 호스트 게이트 **9/9**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). 남은 `KNOWN_FAIL` 은 `/dev/full` 하나이며 미구현이 아니라 **의도된 비목표**다([RISKS](RISKS.md)). `codex` 정적 링크 항목은 별도 추적 라인(`ALR CODEX LINKAGE`)으로 남아 있다.
+수용 테스트: **PASS=103 FAIL=0 KNOWN_FAIL=1 SKIP=0**. 호스트 게이트 **9/9**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). 남은 `KNOWN_FAIL` 은 `/dev/full` **하나뿐**이며 미구현이 아니라 **의도된 비목표**다([RISKS](RISKS.md)). 즉 수용 시험의 `KNOWN_FAIL` 은 이제 전부 "안 할 일"이고 "못 한 일"은 0이다 — codex 정적 링크는 [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 비목표가 되어 관찰 라인(`ALR CODEX LINKAGE`)으로 남는다.
 
 **호환성 폭 (§4 포지셔닝의 근거): 큐레이션된 96개 Ubuntu noble 패키지 중 설치 96/96, 실행 96/96** ([M11](evidence/2026-08-02-m11-breadth.md), [M14](evidence/2026-08-03-m14-ioctl-php.md)).
 
@@ -120,6 +123,7 @@
 
 - **GUI / X11 / Wayland / GPU 가속.** 상위 프로젝트(android-on-linux)의 영역. `alr`은 CLI 전용이다.
 - **Play Store Termux 지원** (ADR 0005).
+- **정적 링크 게스트 바이너리** ([ADR 0008](adr/0008-static-guest-binaries-non-goal.md)). `LD_PRELOAD` 가 닿을 동적 심볼이 없다 — codex 가 대표 사례다. 실행은 막지 않되 경로 가상화는 붙지 않는다.
 - **Android 12~15 지원** ([ADR 0007](adr/0007-android-16-only.md)). 검증하지 않는다 — bionic allowlist 는 릴리스마다 커지므로 Android 16 실측을 구버전으로 외삽할 수 없고, 외삽하지 않기로 했다.
 - **보안 격리.** `alr`은 샌드박스가 **아니다**. 경로 재작성은 방어 경계가 아니다.
 - **x86 에뮬레이션** (box64/FEX). 네이티브 arm64만.

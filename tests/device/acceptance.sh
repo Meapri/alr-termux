@@ -149,6 +149,19 @@ else
     emit "CLI VERSION DETECTS STALE PRELOAD" SKIP "no second .so to swap in"
 fi
 ckrc "CLI UPDATE COMPONENTS"     0  $ALR update-components
+# A static guest binary runs but its paths resolve against ANDROID, not the
+# rootfs (ADR 0008).  alr knew and said nothing at every verbosity; the first
+# attempt at this warning fired on /usr/bin/git, because alr_classify only
+# walks PT_INTERP when given an interp buffer and the caller passed NULL.
+if [ -x "$R/usr/local/bin/codex" ]; then
+    ckc "CLI STATIC BINARY WARNS"  "reason=unhooked-static-binary" \
+        $ALR run /usr/local/bin/codex --version
+else
+    emit "CLI STATIC BINARY WARNS" SKIP "codex not installed"
+fi
+n=$($ALR run /usr/bin/git --version 2>&1 | grep -c 'unhooked-static-binary')
+[ "${n:-1}" -eq 0 ] && emit "CLI DYNAMIC NO FALSE WARN" PASS \
+                    || emit "CLI DYNAMIC NO FALSE WARN" FAIL "warned on a dynamic binary"
 
 echo "── M4 경로 가상화 ──"
 ckc "PRELOAD GUEST ETC"          "Ubuntu 24.04" $ALR run /bin/cat /etc/os-release
@@ -326,8 +339,13 @@ if [ -x "$R/usr/local/bin/codex" ]; then
 if llvm-readelf -d "$R/usr/local/bin/codex" 2>/dev/null | grep -q NEEDED; then
     emit "ALR CODEX LINKAGE" PASS "dynamic - preload reaches it"
 else
-    emit "ALR CODEX LINKAGE" KNOWN_FAIL:static-unhooked \
-         "no NEEDED: runs without path virtualization"
+    # NOT a KNOWN_FAIL: that token means "we want this and it does not work".
+    # ADR 0008 removed codex from G5 -- static linking leaves no dynamic symbol
+    # to interpose, so this is an observation, not a defect.  The check stays
+    # because it is the instrument that would tell us if codex ever ships a
+    # dynamic build.
+    emit "ALR CODEX LINKAGE" PASS \
+         "static as expected (ADR 0008 non-goal): no path virtualization"
 fi
 ckc "ALR CODEX VERSION" "codex-cli" $ALR run /usr/local/bin/codex --version
 else
