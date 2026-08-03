@@ -101,7 +101,7 @@ NDK_ERR := set NDK=/path/to/android-ndk (r29+), or build on-device with HOST_CC=
 endif
 endif
 
-.PHONY: all test doctor alr preload check install release clean dist-clean \
+.PHONY: all test doctor alr preload check check-docs install release clean dist-clean \
         device-test check-zig
 
 all: test
@@ -155,6 +155,7 @@ check-zig:
 # the app seccomp filter is installed by the zygote and nowhere else.
 check: test
 	@ZIG=$(ZIG) bash scripts/check-preload.sh
+	@bash scripts/check-docs.sh
 
 # --- release layout --------------------------------------------------------
 # The same bin/ and share/ that alr-<version>-aarch64.tar.gz carries at its top
@@ -197,3 +198,9 @@ clean:
 dist-clean: clean
 	@rm -rf dist
 	@rm -f alr-*-aarch64.tar.gz
+
+# Cross-references are how this repo carries its argument -- a claim points at
+# the evidence file that measured it.  A broken link reads as a citation, so it
+# gets a gate rather than a reviewer's attention.
+check-docs:
+	@bash scripts/check-docs.sh

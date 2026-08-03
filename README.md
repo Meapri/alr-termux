@@ -4,8 +4,15 @@
 독립형 런타임 + CLI다. 목표 워크로드는 `git`, `node`/`npm`, `make`, `apt` 같은 평범한 Linux CLI 프로그램을
 폰의 CPU 성능 그대로 돌리는 것이다.
 
-> **선행 릴리스 (v0.1.0).** 참조 디바이스는 **1대(MediaTek arm64, Android 16)뿐**이다.
-> 아래 수치는 전부 그 1대에서 잰 것이고, 대부분 **1회 세션 측정**이다. 스냅드래곤 재측정은 아직 없다.
+> **선행 릴리스 (v0.1.0).** 참조 디바이스는 **2대 — MediaTek(커널 6.1)과 Snapdragon 8 Elite(커널 6.6),
+> 둘 다 Android 16**. 두 기기의 zygote 차단 syscall **239개 집합이 완전히 동일하고**, 수용 78·호환성 폭
+> 96/96 도 같다 ([M19](docs/evidence/2026-08-03-m19-snapdragon.md)). **벤더·커널 축은 닫혔다.**
+>
+> **남은 축은 Android 릴리스 하나이고, 하필 그게 제일 중요하다** — 이 설계가 딛고 선 bionic allowlist 는
+> 릴리스마다 커졌다(android12 365줄 → android16 392줄). 갈린 축은 전부 무관했는데 정작 그 축만 고정돼 있었다.
+> Android 12~15 는 **미검증**이다.
+>
+> 성능 수치는 대부분 **1회 세션 측정**이고 **배수는 기기마다 다르다**(같은 워크로드가 6.60× 와 5.23×).
 > 각 수치의 caveat을 표 안에 함께 적어 뒀다 — 각주로 숨기지 않았다.
 
 ## 빠른 시작
@@ -41,26 +48,40 @@ alr version                 # 버전 / preload 경로 / preload sha256 / rootfs 
 
 ## 실측
 
-전부 MediaTek arm64 / Android 16 / `uid=10297 Seccomp=2 untrusted_app_27` 에서 잰 값이다.
+기기는 두 대다 — MediaTek arm64 / 커널 6.1 / `uid=10297`, Snapdragon 8 Elite / 커널 6.6 / `uid=10447`.
+둘 다 Android 16, `Seccomp=2 untrusted_app_27`. 각 표에 어느 기기인지 적었다.
 
-### proot-distro A/B — `git status`, 프로세스 기동
+### proot-distro A/B — `git status` 10,000 파일
 
-10,000 파일(100 디렉토리 × 100 파일) 저장소, 각 5회 중앙값
-([M8](docs/evidence/2026-08-02-m7-m8-workloads-perf.md) §PRoot A/B):
+**양쪽에 같은 git 2.53.0** — proot-distro 가 제공하는 ubuntu 가 26.04 뿐이라 alr 쪽도 26.04 게스트로 맞췄다.
+7회 중앙값, Snapdragon 8 Elite ([M19 §6.1](docs/evidence/2026-08-03-m19-snapdragon.md)):
 
-| | git | 시간 | alr 대비 |
+| | git | 시간 | |
 |---|---|---|---|
-| native (Termux bionic) | 2.55 | 42 ms | — |
-| **alr** (Ubuntu glibc) | 2.43 | **49 ms** | 1.00× |
-| proot-distro (Ubuntu) | 2.53 | 1,704 ms | **34.8× 느림** |
+| native (Termux bionic) | 2.55.0 | 37 ms | — |
+| **alr** (Ubuntu glibc) | **2.53.0** | **39 ms** | 네이티브와 2 ms 차 |
+| proot-distro | **2.53.0** | 947 ms | **24.3× 느림** |
+
+> **이쪽이 아래 M8 수치보다 조건이 깨끗하다.** alr/proot 두 다리가 **같은 배포판·같은 git 버전**이다 —
+> M8 을 약하게 만들었던 "빌드 상이" 를 제거했다. 그러므로 인용할 배수는 **24.3×** 다.
+> **남은 caveat**: native 다리만 여전히 다른 빌드(Termux git 2.55.0)라 "네이티브와 2 ms" 는 근사치다.
+> 1회 세션이고 thermal 이 고정되지 않았다.
+
+<details><summary>참조 기기 #1 (MediaTek) 의 원래 M8 측정 — 세 빌드가 달랐다</summary>
+
+10,000 파일 저장소, 각 5회 중앙값 ([M8](docs/evidence/2026-08-02-m7-m8-workloads-perf.md) §PRoot A/B):
+
+| | git | 시간 |
+|---|---|---|
+| native (Termux bionic) | 2.55 | 42 ms |
+| **alr** (Ubuntu glibc) | 2.43 | **49 ms** |
+| proot-distro (Ubuntu) | 2.53 | 1,704 ms → **34.8×** |
 
 기동(`/bin/true`), 9회 중앙값: native 24 ms / **alr 28 ms** / proot-distro 304 ms → **10.9×**.
 
-> **이 34.8×를 헤드라인 숫자로 쓰지 않는다.** 세 실행의 git 빌드가 서로 다르고(2.55 / 2.43 / 2.53),
-> proot-distro는 **자체 rootfs**를 써서 파일 배치와 페이지 캐시 상태가 alr 쪽과 같지 않으며, 기기는
-> MediaTek MT8775 한 대, **1회 세션** 측정이라 thermal 상태가 고정되지 않았다.
-> 승인된 표현은 **"동일 기기·동일 워크로드에서 proot-distro 대비 `git status` 30배 이상, 프로세스 기동
-> 10배 이상"** 이다.
+**34.8× 를 헤드라인으로 쓰지 않았고, 지금도 쓰지 않는다** — 세 실행의 git 빌드가 서로 달랐기 때문이다.
+34.8× → 24.3× 의 하락은 기기 차이와 **git 버전 통일**이 섞여 있어 분리되지 않는다. 더 엄밀한 쪽을 쓴다.
+</details>
 
 ### proot-distro A/B — `npm ci`
 
@@ -83,8 +104,9 @@ alr version                 # 버전 / preload 경로 / preload sha256 / rootfs 
 ### 호환성 폭
 
 **빌드 툴체인·언어 런타임·CLI 유틸을 아우르는 큐레이션된 96개 Ubuntu noble 패키지에서 무수정 설치 96/96,
-실행 96/96 — 단일 MediaTek 기기 1회 세션**
-([M11](docs/evidence/2026-08-02-m11-breadth.md), [M14](docs/evidence/2026-08-03-m14-ioctl-php.md)).
+실행 96/96 — 기기 2대(MediaTek·Snapdragon)에서 각각**
+([M11](docs/evidence/2026-08-02-m11-breadth.md), [M14](docs/evidence/2026-08-03-m14-ioctl-php.md),
+[M19 §4](docs/evidence/2026-08-03-m19-snapdragon.md)).
 
 > **아카이브 전체(수만 개)에 대한 주장이 아니다.** 이건 우리가 고른 96개에 대한 진술이다.
 > 표현은 [docs/00-product.md §3](docs/00-product.md)의 승인된 문장을 그대로 쓴 것이다.

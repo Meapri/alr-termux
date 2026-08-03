@@ -79,6 +79,12 @@ jobs:
       - name: make test
         run: make test
 
+      # Every claim in this repo cites the evidence file that measured it, so a
+      # dead relative link reads exactly like a citation.  Three were sitting in
+      # the tree when this step was added.  Needs no device and no toolchain.
+      - name: doc link gate
+        run: make check-docs
+
   # ── guest-side interposer ──────────────────────────────────────────────────
   # zig is pinned to the exact patch version on purpose: reproducibility only
   # holds under an exact pin, because a zig upgrade changes bundled compiler-rt

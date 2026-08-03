@@ -71,7 +71,7 @@ FILTER   : INSTALLED
 
 ## 3. ADR 0005 — Play 스토어 빌드를 처음으로 실측했다
 
-[ADR 0005](../adr/0005-termux-github-build.md)는 GitHub 빌드(`targetSdk=28`)를 요구한다. Play 빌드가 왜 안 되는지는 **추론**이었고 실물을 잰 적이 없었다. 이 기기는 Play 빌드가 깔린 채로 왔다:
+[ADR 0005](../adr/0005-play-store-unsupported.md)는 GitHub 빌드(`targetSdk=28`)를 요구한다. Play 빌드가 왜 안 되는지는 **추론**이었고 실물을 잰 적이 없었다. 이 기기는 Play 빌드가 깔린 채로 왔다:
 
 | | Play 빌드 | GitHub 빌드 |
 |---|---|---|

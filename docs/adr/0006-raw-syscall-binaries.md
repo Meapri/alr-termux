@@ -100,7 +100,7 @@ argv[5]=/bin/ls          <- 정확하다
 argv[8]=<root>/bin/ls
 ```
 
-그런데도 `ld-linux-aarch64.so` 라고 말한다 — `ld-linux-aarch64.so.1` 에서 확장자를 뗀 모양이다. 즉 applet 이름의 출처는 argv[0] 이 아니라 **실행 파일 자신의 정체**(`/proc/self/exe` 계열)이고, [ADR 0002](0002-explicit-loader-invocation.md) 의 명시적 로더 호출은 그것을 필연적으로 **로더**로 만든다. preload 가 `/proc/self/exe` 를 합성해 두지만 uutils 는 raw `svc` 라 그 합성이 닿지 않는다.
+그런데도 `ld-linux-aarch64.so` 라고 말한다 — `ld-linux-aarch64.so.1` 에서 확장자를 뗀 모양이다. 즉 applet 이름의 출처는 argv[0] 이 아니라 **실행 파일 자신의 정체**(`/proc/self/exe` 계열)이고, [ADR 0002](0002-explicit-ldso-invocation.md) 의 명시적 로더 호출은 그것을 필연적으로 **로더**로 만든다. preload 가 `/proc/self/exe` 를 합성해 두지만 uutils 는 raw `svc` 라 그 합성이 닿지 않는다.
 
 대조군으로 같은 게스트의 `git`(평범한 동적 glibc 바이너리)은 정상이다 — `git --exec-path` 가 `/usr/lib/git-core` 를 올바로 답한다. 그리고 **`git status` 는 26.04 게스트에서 완전히 동작한다**([M19 §6](../evidence/2026-08-03-m19-snapdragon.md)). 깨지는 것은 coreutils 이지 26.04 전체가 아니다.
 
