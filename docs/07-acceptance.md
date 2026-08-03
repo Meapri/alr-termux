@@ -28,6 +28,16 @@
 
 ## 2. 마일스톤별 acceptance
 
+> ⚠️ **이 절은 2026-08-03 에 실측으로 정리했다.** §1 이 세 줄 위에서 "테스트가 없는 이름에는 상태 토큰을 붙이지 않는다" 고 적어 두었는데, **토큰 달린 64개 중 35개에 러너가 없었고 32개가 `PASS` 를 달고 있었다.**
+>
+> 지운 것이 아니라 셋으로 갈랐다:
+> - **러너를 만들었다 (17개)** — 값싼 것은 문서를 고치는 대신 실제로 쟀다. 그 과정에서 중첩 shebang 이 조용히 빈 출력에 exit 0 을 내던 버그가 나왔다.
+> - **집계 러너가 재는 것 (11개)** — `(집계)` 로 표시하고 어느 러너가 재는지 가리킨다. `PRELOAD PATH ABS` 는 측정된다 — 다른 이름 아래에서.
+> - **잘라냈다 (5개)** — `PRELOAD LINK2SYMLINK *` 는 [ADR 0004](adr/0004-link2symlink.md) 가 **기각한** 그림자 스킴의 성질이다. 러너가 없고 앞으로도 없어야 한다.
+> - **미측정으로 표기 (3개)** — 원하지만 못 잰 것. 이름과 사유는 남기되 **토큰은 뗀다.**
+>
+> 재발은 [`scripts/check-acceptance-names.sh`](../scripts/check-acceptance-names.sh) 가 막는다.
+
 > **현재 온디바이스 스위트 (2026-08-03)**: **PASS=78 FAIL=0 KNOWN_FAIL=2**
 > ([M15](evidence/2026-08-03-m15-cmdline-2604.md)). 두 `KNOWN_FAIL`은
 > `ALR CODEX LINKAGE:static-unhooked`와 `PRELOAD DEV FULL ENOSPC:non-goal-devfull`이며,
@@ -43,11 +53,11 @@
 
 ### M1 — 호스트 스캐폴딩
 ```
-ALR BUILD HOST:                   PASS
-ALR BUILD PRELOAD:                PASS
+ALR BUILD HOST:                    (집계) `make test` (호스트 빌드 + 코어 테스트)
+ALR BUILD PRELOAD:                 (집계) `scripts/check-preload.sh` (게이트 10종)
 ALR PRELOAD GLIBC FLOOR 2.17:     PASS
 ALR PATH RULE HOST TESTS:         PASS   (tests/cases/paths.tsv N cases)
-ALR CONFIG ROUNDTRIP:             SKIP   — src/common/alr_config.{h,c} 는 만들지 않았다 (비목표)
+ALR CONFIG ROUNDTRIP:              미측정 — 설정 파일이 구현되지 않았다 — `alr config` 도 `config.toml` 리더도 없다
 ALR ELF CLASSIFY:                 PASS
 ```
 
@@ -82,17 +92,17 @@ ALR SUPERVISOR SIGSYS COUNT:      sigsys=22 / pids=21  (기록만. 프로세스�
 
 ### M4 — 경로 가상화
 ```
-PRELOAD PATH ABS:                 PASS
-PRELOAD PATH REL:                 PASS
-PRELOAD PATH SYSDIR:              PASS
-PRELOAD PATH IDEMPOTENT:          PASS
-PRELOAD DOTDOT CLAMP:             PASS
+PRELOAD PATH ABS:                  (집계) `ALR PATH RULE HOST TESTS` (73 assertions)
+PRELOAD PATH REL:                  (집계) `ALR PATH RULE HOST TESTS`
+PRELOAD PATH SYSDIR:               (집계) `ALR PATH RULE HOST TESTS`
+PRELOAD PATH IDEMPOTENT:           (집계) `ALR PATH RULE HOST TESTS`
+PRELOAD DOTDOT CLAMP:              (집계) `ALR PATH RULE HOST TESTS` (`tests/cases/paths.tsv`)
 PRELOAD NORMALIZE BEFORE SYSDIR:  PASS
-PRELOAD PBUF PATH_MAX:            PASS
+PRELOAD PBUF PATH_MAX:             (집계) `ALR PATH RULE HOST TESTS`
 PRELOAD PROC SELF EXE:            PASS
-PRELOAD PROC SELF CMDLINE:        PASS
+PRELOAD PROC SELF CMDLINE:         (집계) `PRELOAD PROC CMDLINE` + `PRELOAD CMDLINE NO HOST PATH`
 PRELOAD DLOPEN ABS PATH:          PASS
-PRELOAD DLOPEN ORIGIN TOKEN:      PASS
+PRELOAD DLOPEN ORIGIN TOKEN:       미측정 — `$ORIGIN` 토큰 확장 경로를 밟는 게스트 라이브러리를 아직 못 찾았다
 PRELOAD MKSTEMP:                  PASS
 PRELOAD DEV FULL ENOSPC:          KNOWN_FAIL:non-goal-devfull
 PRELOAD CHK SYMBOLS PRESENT:      PASS
@@ -122,9 +132,9 @@ PRELOAD RW MICROBENCH:            PASS
 PRELOAD EXEC DYNAMIC:             PASS
 PRELOAD EXEC SHEBANG:             PASS
 PRELOAD EXEC SHEBANG RECURSION:   PASS
-PRELOAD EXEC STATIC:              KNOWN_FAIL:unhooked-static-binary
+PRELOAD EXEC STATIC:               (집계) `CLI STATIC BINARY WARNS` + `ALR CODEX LINKAGE`
 PRELOAD EXEC ENVP IDEMPOTENT:     PASS
-PRELOAD EXEC ALL 13 VARIANTS:     PASS
+PRELOAD EXEC ALL 13 VARIANTS:      (집계) `ALR EXEC RULE TESTS` (44 assertions)
 PRELOAD SYSCALL REWRITE:          PASS
 PRELOAD SYMLINKAT ASYMMETRY:      PASS
 ALR BASH INTERACTIVE:             PASS
@@ -144,11 +154,6 @@ ALR PIPELINE:                     PASS   (echo | grep | wc)
 
 ### M6 — 패키지 매니저
 ```
-PRELOAD LINK2SYMLINK BASIC:       PASS
-PRELOAD LINK2SYMLINK NLINK:       PASS
-PRELOAD LINK2SYMLINK FSTAT NLINK: PASS
-PRELOAD LINK2SYMLINK DTYPE:       PASS
-PRELOAD LINK2SYMLINK UNLINK:      PASS
 ALR DPKG VERSION:                 PASS
 ALR DPKG ARCH:                    PASS   arm64
 ALR APT VERSION:                  PASS
@@ -174,10 +179,10 @@ ALR NODE VERSION:                 PASS
 ALR NODE EXECPATH:                PASS   ← process.execPath가 게스트 경로여야 함
 ALR NODE FS STAT:                 PASS   ← libuv raw syscall 회귀 테스트
 ALR NODE IO_URING SURVIVE:        PASS   (Node 22)  ← SIGSYS 구제 회귀 테스트
-ALR NPM CI:                       PASS   elapsed_ms=2000 MEASURED (proot 6,240~6,870 — 동일 바이너리)
+ALR NPM CI:                        미측정 — 손으로만 쟀다([M12 §4](evidence/2026-08-03-m12-spawn-resolver.md)) — 하네스에 없다
 ALR CODEX VERSION:                PASS   ← "바이너리가 뜬다"는 뜻뿐이다. 아래 주석
 ALR CODEX LINKAGE:                KNOWN_FAIL:static-unhooked
-ALR PTY TMUX:                     PENDING_DEVICE  ← `tmux -V`만 PASS. 대화형 세션 미검증
+ALR PTY TMUX:                     PASS
 ```
 
 > **`ALR CODEX VERSION: PASS`가 뜻하지 않는 것.** codex 0.146.0은 **정적 링크 musl 바이너리**다

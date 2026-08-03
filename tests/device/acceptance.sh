@@ -305,6 +305,36 @@ ckc "SUPERVISOR SIGNAL FORWARD" "got-term" $ALR run /bin/bash -c \
 # bash reading a script from stdin is the shape an interactive session uses.
 ck  "ALR BASH INTERACTIVE" bash-stdin $ALR run /bin/bash -s <<< 'echo bash-stdin'
 
+# AF_UNIX addresses carry a path and nothing rewrote it: bind()/connect() were
+# not interposed.  tmux was the visible victim; dbus, gpg-agent, X11 and every
+# database socket under /var/run are in the same class.  The abstract-namespace
+# case is the control that keeps the fix honest -- prefixing sun_path[0]=='\0'
+# would invent a different address.
+if [ -r "$R/usr/include/stdio.h" ]; then
+    cp tests/device/probe_unixsock.c "$R/tmp/probe_unixsock.c" 2>/dev/null
+    if $ALR run /usr/bin/gcc -O1 -o /tmp/probe_unixsock /tmp/probe_unixsock.c >/dev/null 2>&1; then
+        ck "PRELOAD UNIX SOCKET PATH" "unix-path-ok abstract-ok" $ALR run /tmp/probe_unixsock
+    else
+        emit "PRELOAD UNIX SOCKET PATH" SKIP "probe did not compile"
+    fi
+else
+    emit "PRELOAD UNIX SOCKET PATH" SKIP "no libc6-dev in the guest"
+fi
+# tmux is the workload that exposed it.  A detached session that outlives the
+# check, so `tmux ls` is answered by a live server rather than a race.
+# Server and query in ONE `alr run`: the supervisor sets PTRACE_O_EXITKILL, so
+# every tracee dies when it exits.  A daemonising process therefore cannot
+# outlive the invocation that started it -- `tmux new-session -d` in one run
+# and `tmux ls` in the next reports "no server running", and that is by design
+# rather than a tmux failure.  Interactively the server lives as long as the
+# `alr shell` that owns it.
+if [ -x "$R/usr/bin/tmux" ]; then
+    ckc "ALR PTY TMUX" "alracc" $ALR run /bin/bash -c \
+        'tmux kill-server 2>/dev/null; tmux new-session -d -s alracc "sleep 5" && tmux ls'
+else
+    emit "ALR PTY TMUX" SKIP "tmux not installed"
+fi
+
 echo "── M4 경로 가상화 ──"
 ckc "PRELOAD GUEST ETC"          "Ubuntu 24.04" $ALR run /bin/cat /etc/os-release
 ck  "PRELOAD PROC SELF EXE"      /bin/readlink  $ALR run /bin/readlink /proc/self/exe

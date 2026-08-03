@@ -197,6 +197,16 @@ getgrent
 endgrent
 getgrouplist
 socket
+# AF_UNIX addresses carry a PATH in sun_path and nothing rewrote it until
+# 2026-08-03: tmux could not create its socket even with the directory present,
+# because the directory was rewritten and the address was not.  Abstract
+# sockets (sun_path[0]=='\0') must NOT be touched.
+bind
+connect
+# accept(2) is BLOCKED by the zygote filter while accept4(2) is allowed, so the
+# supervisor emulated accept as -ENOSYS and every guest server failed to take a
+# connection.  accept(f,a,l) == accept4(f,a,l,0).
+accept
 
 # --- 7    /proc virtualization
 # §7 — /proc/self/cmdline is synthesised through the open/fopen wrappers above;

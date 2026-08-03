@@ -1999,6 +1999,116 @@ int socket(int domain, int type, int protocol)
     return real_socket(domain, type, protocol);
 }
 
+/* ── AF_UNIX socket paths (docs/04-preload-spec.md §5) ───────────────────
+ *
+ * A unix socket address carries a PATH in sun_path, and until 2026-08-03
+ * nothing rewrote it: bind() and connect() were not interposed at all.  So a
+ * guest binding "/tmp/tmux-10297/default" bound the ANDROID path, which does
+ * not exist.  MEASURED: tmux failed with
+ *     error creating /tmp/tmux-10297/default (No such file or directory)
+ * even after the directory was created and confirmed visible to the guest --
+ * the directory was rewritten, the socket address was not.
+ *
+ * The class is much wider than tmux: dbus, gpg-agent and ssh-agent, X11, and
+ * every database that listens on /var/run/<db>/.s.* are all in it.
+ *
+ * TWO THINGS THIS MUST NOT DO:
+ *   - rewrite an ABSTRACT socket.  sun_path[0] == '\0' means the Linux
+ *     abstract namespace, which has no filesystem presence at all; prefixing
+ *     it would invent a different address.
+ *   - truncate.  sun_path is 108 bytes and the root prefix is ~57 of them, so
+ *     a long guest path genuinely does not fit.  A silently truncated address
+ *     is a socket at the WRONG path that then half-works; fail with
+ *     ENAMETOOLONG instead.
+ */
+static int (*real_bind)(int, const struct sockaddr *, socklen_t);
+static int (*real_connect)(int, const struct sockaddr *, socklen_t);
+
+static int un_rewrite(const struct sockaddr *addr, socklen_t len,
+                      struct sockaddr_un *out, socklen_t *outlen)
+{
+    const struct sockaddr_un *un = (const struct sockaddr_un *)addr;
+    char buf[ALR_PBUF];
+    const char *r;
+    size_t n;
+
+    if (!addr || addr->sa_family != AF_UNIX) return 0;
+    if (len < (socklen_t)(sizeof(sa_family_t) + 1))   return 0;  /* unnamed */
+    if (un->sun_path[0] == '\0')                      return 0;  /* abstract */
+    if (un->sun_path[0] != '/')                       return 0;  /* relative */
+
+    r = rw(un->sun_path, buf, sizeof buf);
+    if (!r) { errno = ENAMETOOLONG; return -1; }
+    if (r == un->sun_path) return 0;                             /* unchanged */
+
+    n = strlen(r);
+    if (n >= sizeof out->sun_path) {
+        lg("alr unix: rewritten socket path too long (%zu >= %zu): %s\n",
+           n, sizeof out->sun_path, r);
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    memset(out, 0, sizeof *out);
+    out->sun_family = AF_UNIX;
+    memcpy(out->sun_path, r, n + 1);
+    /* Length must cover the NUL for a pathname socket. */
+    *outlen = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n + 1);
+    return 1;
+}
+
+/* accept(2) is BLOCKED by the zygote filter; accept4(2) is not.
+ *
+ * MEASURED 2026-08-03: syscall 202 (accept) is in the 239-entry blocked set on
+ * both reference devices, while 242 (accept4) is allowed -- as are socket,
+ * bind, listen and connect.  So the supervisor emulated accept as -ENOSYS (the
+ * table default) and EVERY GUEST PROGRAM THAT ACCEPTS CONNECTIONS FAILED.
+ * tmux is how it surfaced: the server started, bound its socket, and then
+ * died with "server exited unexpectedly" the moment a client connected.
+ * Nothing tested it, so the whole class -- servers of any kind, unix or TCP --
+ * was quietly broken.
+ *
+ * accept(fd, addr, len) is exactly accept4(fd, addr, len, 0); the flags
+ * argument is the only difference.  Doing it here rather than in the
+ * supervisor is both simpler and free: this is a plain libc call, whereas
+ * redirecting one syscall to another from the tracer means rewriting registers
+ * and re-entering, for no gain. */
+static int (*real_accept4)(int, struct sockaddr *, socklen_t *, int);
+
+int accept(int fd, struct sockaddr *addr, socklen_t *len)
+{
+    if (!real_accept4) real_accept4 = dlsym(RTLD_NEXT, "accept4");
+    if (!real_accept4) { errno = ENOSYS; return -1; }
+    return real_accept4(fd, addr, len, 0);
+}
+
+int bind(int fd, const struct sockaddr *addr, socklen_t len)
+{
+    struct sockaddr_un un;
+    socklen_t ul = 0;
+    int k;
+    ensure_init();
+    k = un_rewrite(addr, len, &un, &ul);
+    if (k < 0) return -1;
+    if (!real_bind) real_bind = dlsym(RTLD_NEXT, "bind");
+    if (!real_bind) { errno = ENOSYS; return -1; }
+    return k ? real_bind(fd, (const struct sockaddr *)&un, ul)
+             : real_bind(fd, addr, len);
+}
+
+int connect(int fd, const struct sockaddr *addr, socklen_t len)
+{
+    struct sockaddr_un un;
+    socklen_t ul = 0;
+    int k;
+    ensure_init();
+    k = un_rewrite(addr, len, &un, &ul);
+    if (k < 0) return -1;
+    if (!real_connect) real_connect = dlsym(RTLD_NEXT, "connect");
+    if (!real_connect) { errno = ENOSYS; return -1; }
+    return k ? real_connect(fd, (const struct sockaddr *)&un, ul)
+             : real_connect(fd, addr, len);
+}
+
 static int rb_connect(void)
 {
     struct sockaddr_un sa;

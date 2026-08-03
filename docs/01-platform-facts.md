@@ -117,6 +117,11 @@ allowlist 부재로 차단되는 것(확인됨): `set_robust_list`(99), `get_rob
 
 허용되는 것(확인됨): `prctl`, `seccomp`, `ptrace`, `execve`, `execveat`, `clone`, **`clone3`** (`SECCOMP_ALLOWLIST_COMMON.TXT`에 `clone3(clone_args*, size_t) all` — Docker 시대의 clone3 참사는 여기서 반복되지 않는다).
 
+> ⚠️ **`accept`(202)는 차단, `accept4`(242)는 허용** — `MEASURED` 2026-08-03.
+> 소켓 계열 중 `socket`(198)·`bind`(200)·`listen`(201)·`connect`(203)·`accept4`(242)는 전부 허용인데 **`accept` 하나만 막힌다.** 표 기본값이 `-ENOSYS` 라 슈퍼바이저가 그렇게 에뮬레이션했고, 결과적으로 **게스트에서 연결을 받는 모든 프로그램이 깨져 있었다.** tmux 서버가 소켓을 만들고 나서 클라이언트가 붙는 순간 `server exited unexpectedly` 로 죽는 형태로 드러났다.
+> **해결**: preload 가 `accept(f,a,l)` 을 `accept4(f,a,l,0)` 으로 구현한다 — 둘은 flags 인자 하나만 다르다. 슈퍼바이저에서 syscall 을 갈아 끼우는 것보다 싸고 단순하다(레지스터 재작성이 필요 없다).
+> **왜 이제야 나왔나**: 서버를 띄우는 수용 시험이 없었다. `PRELOAD UNIX SOCKET PATH` 프로브의 첫 판본조차 `connect` 까지만 해서 **깨진 상태로 통과했다** — `connect` 는 listen 백로그에 붙는 것만으로 성공하기 때문이다. 검사는 실패하는 지점까지 가야 한다.
+
 > ✅ **SysV IPC는 게스트에서 쓸 수 없다** — `MEASURED` 2026-08-03. ([RISKS R9](RISKS.md) 종결)
 > 스윕의 차단 집합에 **180–197이 통째로** 들어 있다: POSIX mqueue(180–185)와 SysV IPC 전체 — `msgget`(186) `msgctl`(187) `msgrcv`(188) `msgsnd`(189) `semget`(190) `semctl`(191) `semtimedop`(192) `semop`(193) `shmget`(194) `shmctl`(195) `shmat`(196) `shmdt`(197). 즉 zygote 블록리스트에 있고 "혹시 안 막혔을 수도"가 아니다.
 > 게스트에서 직접 불러 확증했다: `shmget`/`semget`/`msgget` 전부 `ENOSYS`(테이블 기본값)를 받고, 같은 실행의 `ALR_LOG`가 SIGSYS 트랩 **3건**을 에뮬레이션했다고 보고한다 — 즉 커널이 실제로 TRAP을 냈고 슈퍼바이저가 받아냈다. 근거: [M16 §1](evidence/2026-08-03-m16-ipc-audit.md) (프로브 소스 `tests/device/probe_ipc.c`).

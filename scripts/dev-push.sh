@@ -124,6 +124,14 @@ preload)
     "${SSH[@]}" "mkdir -p ~/$R/usr/lib/alr"
     "${SCP[@]}" build/libalr_preload.so build/libalr_preload.manifest.json \
                 "$HOST:$R/usr/lib/alr/"
+    # ALSO the host-side copy next to the alr binary.  There are two: the one
+    # the guest LOADS (in the rootfs, above) and the one `alr version` reports
+    # and `alr update-components` copies FROM.  Deploying only the first let the
+    # acceptance suite silently revert the rootfs to the older build, because
+    # CLI UPDATE COMPONENTS re-installs from this path -- so a freshly deployed
+    # preload was overwritten by a stale one mid-suite and two new checks
+    # failed against code that was actually correct.
+    "${SCP[@]}" build/libalr_preload.so "$HOST:$REMOTE/libalr_preload.so"
     "${SSH[@]}" "cd ~/$R/usr/lib/alr && \
         echo '-- glibc versions needed (must be 2.17 only) --' && \
         llvm-readelf -V libalr_preload.so 2>/dev/null | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tr '\n' ' ' && echo && \
