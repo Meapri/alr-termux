@@ -159,6 +159,12 @@ check: test
 	@bash scripts/check-reasons.sh
 	@bash scripts/check-invariants.sh
 	@bash scripts/check-acceptance-names.sh
+	@# The path-coverage gate reads the built .so's symbol table, so build it
+	@# rather than assuming a previous command left one behind.  It did on the
+	@# author's machine and did not in the release workflow -- check-preload.sh
+	@# builds into a scratch dir on purpose, so `build/` is absent there, and
+	@# `make check` failed on the release tag having passed locally all day.
+	@ZIG=$(ZIG) scripts/build-preload.sh >/dev/null
 	@bash scripts/check-path-coverage.sh
 	@bench/regression_gate.py --self-test
 
