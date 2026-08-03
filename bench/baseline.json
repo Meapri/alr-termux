@@ -13,12 +13,10 @@
     "Record a device with:  bench/regression_gate.py --from <outputs> --update",
     "Hard invariants are device-independent and are NOT keyed here.",
     "",
-    "Reference #1 (MediaTek MT8775 / SM-X236N / Android 16 / kernel 6.1) is",
-    "NOT listed, deliberately.  Its numbers are exec_per_sec 341 and",
-    "node_cold_ms 57.0, but its ro.board.platform was never recorded and the",
-    "phone was not in hand when this file was re-keyed.  Writing a guessed key",
-    "would silently never match, so the entry is left for that device's next",
-    "run to create -- the gate prints NEW rather than passing on nothing."
+    "Both reference devices are now recorded.  Reference #1 was absent for a",
+    "while because its ro.board.platform was unknown and a guessed key would",
+    "have silently never matched; it was filled in by running the harness on",
+    "that phone (mt6878), which is how the gate is meant to learn a device."
   ],
   "devices": {
     "SM-S937N/sun/android16/6.6": {
@@ -29,6 +27,15 @@
       "preload.rw_rel_ns": 7.0,
       "preload.rw_sysdir_ns": 32.0,
       "preload.rw_under_ns": 116.7
+    },
+    "SM-X236N/mt6878/android16/6.1": {
+      "exec_per_sec": 342,
+      "node_cold_ms": 51.0,
+      "preload.rw_abs_ns": 58.9,
+      "preload.rw_pinned": 1,
+      "preload.rw_rel_ns": 3.6,
+      "preload.rw_sysdir_ns": 13.5,
+      "preload.rw_under_ns": 53.2
     }
   }
 }

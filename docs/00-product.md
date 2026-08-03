@@ -24,7 +24,15 @@
 >
 > **지원 선언은 "Android 16, SoC 벤더 무관 (OEM 은 Samsung 2대만 실측)" 이다.** 범위 밖 기기에서 `alr` 은 거절하지 않지만 `alr doctor` 가 **명시적으로 미지원이라고 말한다** — 그 기기의 스윕 결과를 함께 보여 주므로, 감수하고 쓸지는 사용자가 판단한다. 우리가 검증하지 않았다는 사실이 가려지지는 않는다.
 >
-> **성능 배수는 기기별이다.** 같은 워크로드가 두 기기에서 `node` 콜드 6.60× 와 5.23× 로 갈린다. 배수를 인용할 때는 기기를 함께 쓴다([M19 §6.3](evidence/2026-08-03-m19-snapdragon.md)).
+> **성능 배수는 기기별이다.** 워밍업 규율을 적용해 **두 기기를 같은 조건으로** 잰 결과([M19 §6.3](evidence/2026-08-03-m19-snapdragon.md)):
+>
+> | | MediaTek | Snapdragon |
+> |---|---|---|
+> | `node -e 0` 콜드 vs proot | 6.63× | 5.49× |
+> | exec 처리량 | 342 /s (proot 131) | 707 /s (proot 224) |
+> | 재작성 총비용 (`git status` 10k) | 38.2 µs | 73.6 µs |
+>
+> **exec 는 Snapdragon 이 2배 빠르고**(proot 쪽도 함께 오르므로 기기 성능 차이다) **재작성 per-op 은 MediaTek 이 빠르다.** 배수가 MediaTek 에서 더 큰 것은 alr 이 빨라서가 아니라 **proot 가 더 느려서**다. 배수를 인용할 때는 기기를 함께 쓴다.
 - **호스트**: Termux **F-Droid / GitHub 빌드** (`targetSdkVersion=28`). Play Store 빌드는 **v1 미지원** (ADR 0005).
 - **게스트**: Ubuntu 24.04 (noble) arm64, glibc 2.39, `ports.ubuntu.com` 아카이브. Debian bookworm/trixie는 v1.1 목표.
 - **워크로드**: `git`, `node`(및 npm/npx), `codex`, `bash`, `apt`/`dpkg`, 일반 coreutils/빌드 툴체인.

@@ -9,6 +9,13 @@
 #
 # Recovered from the '#if 0' ground-truth block that alr_sigsys_table.h
 # has carried since bringup; reformatted one-per-line so it diffs.
+#
+# VERIFIED AGAINST THE LIVE DEVICE 2026-08-03: the phone was reconnected and
+# `alr doctor` re-swept it from scratch.  diff-sweep.sh against this file:
+# IDENTICAL, 239 of 239.  So the recovery was faithful, the cross-device
+# comparison published in M19 was against real ground truth rather than a
+# mangled reconstruction, and the set is stable across sessions (first swept
+# 2026-08-02).
 18
 39
 40
