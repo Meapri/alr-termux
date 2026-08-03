@@ -10,12 +10,12 @@
 
 | | 상태 |
 |---|---|
-| MediaTek MT8775, Android 16 (커널 `6.1.145-android14`) | **검증됨** — 수용 78, 폭 96/96 |
-| Qualcomm Snapdragon 8 Elite SM8750, Android 16 (커널 `6.6.98-android15`) | **검증됨** — 수용 78, 폭 96/96 ([M19](evidence/2026-08-03-m19-snapdragon.md)) |
+| MediaTek MT8775, Android 16 (커널 `6.1.145-android14`) | **검증됨** — 수용 158, 폭 96/96 |
+| Qualcomm Snapdragon 8 Elite SM8750, Android 16 (커널 `6.6.98-android15`) | **검증됨** — 폭 96/96, 차단 syscall 집합 동일 ([M19](evidence/2026-08-03-m19-snapdragon.md)) |
 | Android 12 / 13 / 14 / 15 (모든 기기) | **범위 밖 — 지원하지 않는다.** 검증 계획 없음 ([ADR 0007](adr/0007-android-16-only.md)) |
 | 다른 OEM 의 Android 16 | **미측정, 그리고 잴 수단이 없다.** 미지원이라는 뜻이 아니다 — 확인해 주지 못한다는 뜻이다 (아래) |
 
-> ✅ **SoC 벤더·커널 축은 닫혔다.** 두 기기는 SoC 벤더가 다르고 커널도 6.1-android14 대 6.6-android15 로 갈리는데, **zygote 차단 syscall 239개 집합이 완전히 동일하다**([§A6](01-platform-facts.md)). 수용 78종, 호환성 폭 96/96, 슈퍼바이저 12/12, `path_traps=0 syscall_stops=0` 도 모두 같다.
+> ✅ **SoC 벤더·커널 축은 닫혔다.** 두 기기는 SoC 벤더가 다르고 커널도 6.1-android14 대 6.6-android15 로 갈리는데, **zygote 차단 syscall 239개 집합이 완전히 동일하다**([§A6](01-platform-facts.md)). 호환성 폭 96/96, 슈퍼바이저 12/12, `path_traps=0 syscall_stops=0` 도 모두 같다.
 >
 > ⚠️ **OEM 축은 재지 못했고, 앞으로도 못 잰다 — 두 기기 다 Samsung 이다.** zygote allowlist 는 SoC 벤더가 아니라 **OEM 이 빌드한 플랫폼 이미지 안의 bionic** 에서 오므로, 이 실측이 닫은 것은 정확히 **SoC·커널 축**이다.
 >
@@ -62,7 +62,7 @@
 | G3 | **MEASURED 달성** | 수용 테스트가 매 실행 `path_traps=0 syscall_stops=0` 보고 |
 | G4 | **MEASURED 달성** | proot-distro 대비 `git status` **25.8×** (양쪽 git 2.53.0 동일, 워밍업 후 — [M19 §6.1](evidence/2026-08-03-m19-snapdragon.md)). 34.8× 는 git 빌드가 셋 다 달랐던 M8 수치라 인용하지 않는다 |
 | G5 | **MEASURED 달성** | `node`/`npm` 은 동적 링크라 경로 가상화가 적용된다 — `npm ci` 실측 proot-distro 대비 **3.12×** ([M12](evidence/2026-08-03-m12-spawn-resolver.md)). codex 는 [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 G5 에서 뺐다(정적 링크, 원리적으로 후킹 불가) |
-| G6 | **부분 달성** | 어휘가 이제 **강제된다** — `scripts/check-reasons.sh` 가 방출 코드와 [05 §7](05-provisioning-spec.md) 목록을 **양방향**으로 검사하고 `make check`·CI 에 걸려 있다(현재 22/22 일치). **남은 것**: `alr.c` 의 일부 stderr 실패 경로에 아직 코드가 없다 — 어휘는 지켜지지만 전수는 아니다 |
+| G6 | **부분 달성** | 어휘가 이제 **강제된다** — `scripts/check-reasons.sh` 가 방출 코드와 [05 §7](05-provisioning-spec.md) 목록을 **양방향**으로 검사하고 `make check`·CI 에 걸려 있다(현재 32/32 일치). **남은 것**: `alr.c` 의 일부 stderr 실패 경로에 아직 코드가 없다 — 어휘는 지켜지지만 전수는 아니다 |
 
 > ⚠️ **codex 는 비목표다**([ADR 0008](adr/0008-static-guest-binaries-non-goal.md)). `--with codex` 로 설치·실행은 되지만 **경로 가상화 없이 돈다.** 아래는 그 근거이며, `alr` 은 정적 ELF 를 실행할 때 한 줄로 경고한다.
 >
@@ -70,13 +70,15 @@
 >
 > 이것은 [RISKS](RISKS.md) 의 "정적 링크 게스트 바이너리" 한계에 해당하며, `node`/`npm` 에는 적용되지 않는다(둘 다 동적 링크라 정상적으로 가상화된다). 수용 테스트가 `ALR CODEX LINKAGE` 로 이 상태를 추적한다.
 
-수용 테스트: **PASS=103 FAIL=0 KNOWN_FAIL=1 SKIP=0**. 호스트 게이트 **9/9**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). 남은 `KNOWN_FAIL` 은 `/dev/full` **하나뿐**이며 미구현이 아니라 **의도된 비목표**다([RISKS](RISKS.md)). 즉 수용 시험의 `KNOWN_FAIL` 은 이제 전부 "안 할 일"이고 "못 한 일"은 0이다 — codex 정적 링크는 [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 비목표가 되어 관찰 라인(`ALR CODEX LINKAGE`)으로 남는다.
+수용 테스트: **PASS=158 FAIL=0 KNOWN_FAIL=1 SKIP=0**. 호스트 게이트 **10/10**([M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 `wrappers.def` + 심볼 존재 게이트 추가 — 즉시 누락 심볼 24개를 찾아냈다). 남은 `KNOWN_FAIL` 은 `/dev/full` **하나뿐**이며 미구현이 아니라 **의도된 비목표**다([RISKS](RISKS.md)). 즉 수용 시험의 `KNOWN_FAIL` 은 이제 전부 "안 할 일"이고 "못 한 일"은 0이다 — codex 정적 링크는 [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 비목표가 되어 관찰 라인(`ALR CODEX LINKAGE`)으로 남는다.
 
 **호환성 폭 (§4 포지셔닝의 근거): 큐레이션된 96개 Ubuntu noble 패키지 중 설치 96/96, 실행 96/96** ([M11](evidence/2026-08-02-m11-breadth.md), [M14](evidence/2026-08-03-m14-ioctl-php.md)).
 
 > ⚠️ `php-cli` 는 출하 빌드에서 동작하지만 **원인을 규명하고 고친 것이 아니다.** abort 여부가 preload 의 심볼 테이블 크기에 민감하다는 것이 실측되었고(경계 ~152 심볼), php 가 쓸 리 없는 심볼 하나만 빼도 재발한다. 심볼을 덜어내는 변경이 php 를 다시 깨뜨릴 수 있으며 그때 범인은 그 변경이 아니다. 자세한 내용과 진단용 컴파일 가드는 [M14 §2](evidence/2026-08-03-m14-ioctl-php.md).
 
-> 이 96/96 을 인용할 때의 정직한 표현: "빌드 툴체인·언어 런타임·CLI 유틸을 아우르는 **큐레이션된 96개** 패키지에서 무수정 설치 96/96, 실행 95/96 — 단일 MediaTek 기기 1회 세션." 아카이브 전체(수만 개)에 대한 주장이 아니다.
+> 이 96/96 을 인용할 때의 정직한 표현: "빌드 툴체인·언어 런타임·CLI 유틸을 아우르는 **큐레이션된 96개** 패키지에서 무수정 설치 96/96, 실행 96/96 — 두 기기(MediaTek·Snapdragon), Android 16." 아카이브 전체(수만 개)에 대한 주장이 아니다.
+>
+> **`실행 96/96` 은 2026-08-04 에 다시 쟀다.** 그전까지 이 스위트의 아홉 줄이 `... | head -1` 로 끝나는 파이프라인이었고 `pipefail` 이 없어서 **종료 상태가 `head` 의 것**이었다 — 왼쪽이 어떻게 죽든 0 이다. 즉 그 아홉 줄은 실패를 볼 수 없었다. 게스트 셸을 `bash -o pipefail` 로 바꾸고 다시 돌린 결과가 여전히 96/96 이다: **아홉 줄 다 진짜로 통과하고 있었다.** 숫자는 그대로고 근거가 생겼다.
 
 ## 4. 성능 목표 — 정직하게 쓸 것
 
@@ -117,7 +119,7 @@
 
 > grun은 빠르지만 포크된 glibc와 포크된 패키지 세트를 요구한다. proot-distro는 Ubuntu 아카이브 전체를 쓰지만 path syscall마다 ptrace 비용을 낸다. **alr은 둘 다 얻는 첫 시도다.**
 
-이 포지셔닝이 성립하려면 **호환성 폭(breadth)을 숫자로 방어**해야 한다 ([07-acceptance.md §5](07-acceptance.md)). **측정 완료**: 큐레이션된 96개 패키지에서 설치 96/96, 실행 95/96 ([M11](evidence/2026-08-02-m11-breadth.md)). 인용 시 §3의 정직한 표현을 쓸 것 — 아카이브 전체에 대한 주장이 아니다.
+이 포지셔닝이 성립하려면 **호환성 폭(breadth)을 숫자로 방어**해야 한다 ([07-acceptance.md §5](07-acceptance.md)). **측정 완료**: 큐레이션된 96개 패키지에서 설치 96/96, 실행 96/96 ([M11](evidence/2026-08-02-m11-breadth.md), `pipefail` 로 재측정 2026-08-04). 인용 시 §3의 정직한 표현을 쓸 것 — 아카이브 전체에 대한 주장이 아니다.
 
 ## 5. 비목표 (Non-goals)
 

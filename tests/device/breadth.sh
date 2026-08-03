@@ -177,7 +177,22 @@ printf '%s\n' "$PKGS" | while IFS=$'\t' read -r pkg cmd; do
         printf '%s\tFAIL\tSKIP\tnot-installed(%s)\n' "$pkg" "${st:-absent}" >> "$OUT"
         continue
     fi
-    out=$(env ALR_FAKEROOT=1 "$ALR" run /bin/sh -c "$cmd" 2>&1); rc=$?
+    # `set -o pipefail` INSIDE the guest shell.  Nine of these commands are
+    # pipelines ending in head/tail, and without it the exit status is head's,
+    # which is 0 no matter how the left-hand side died -- so a binary that
+    # printed "CANNOT LINK EXECUTABLE" and exited 127 scored PASS.  The point
+    # of this sweep is which packages RUN; a scoring rule that cannot see a
+    # failed exec is not measuring that.
+    # bash, not sh: Ubuntu's /bin/sh is dash, which has no `set -o pipefail`
+    # and, being a special builtin failing in a non-interactive shell, EXITS --
+    # so the first attempt at this scored the whole sweep 0/96 with rc=2.
+    #
+    # pipefail matters because nine of these commands are pipelines ending in
+    # head/tail: without it the exit status is head's, which is 0 no matter how
+    # the left-hand side died, so a binary printing "CANNOT LINK EXECUTABLE"
+    # and exiting 127 scored PASS.  The point of this sweep is which packages
+    # RUN, and a rule that cannot see a failed exec does not measure that.
+    out=$(env ALR_FAKEROOT=1 "$ALR" run /bin/bash -o pipefail -c "$cmd" 2>&1); rc=$?
     if [ $rc -eq 0 ]; then
         printf '%s\tPASS\tPASS\t%s\n' "$pkg" "$(printf '%s' "$out" | head -1 | cut -c1-60)" >> "$OUT"
     else

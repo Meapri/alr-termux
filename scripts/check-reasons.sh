@@ -19,10 +19,19 @@ cd "$(dirname "$0")/.." || exit 2
 
 SPEC=docs/05-provisioning-spec.md
 
-# Emitted: two shapes exist and both count.
-#   die("code", detail)          -- prints "reason=code" from the helper
+# Emitted: three shapes exist and all count.
+#   die("code", detail)               -- prints "reason=code" from the helper
+#   die_staged(part, "code", detail)  -- same, after removing <R>.part
 #   a literal reason=code inside a printf/fprintf string
+#
+# The die_staged form was added on 2026-08-04 and this gate immediately
+# reported four codes as "in the spec but never emitted" -- which was the gate
+# working: a wrapper it did not know about is indistinguishable from a deleted
+# call site.  Matching the argument BEFORE the string keeps that property: a
+# fourth wrapper will fail here too rather than silently pass.
 emitted=$( { grep -rhoE 'die\("[a-z0-9-]+"' src/ | sed 's/die("//; s/"//'
+             grep -rhoE 'die_staged\([A-Za-z_]+, *"[a-z0-9-]+"' src/ \
+                 | sed 's/.*, *"//; s/"//'
              grep -rhoE 'reason=[a-z0-9-]+'   src/ | sed 's/reason=//'
            } | sort -u )
 

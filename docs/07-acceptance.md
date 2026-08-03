@@ -209,6 +209,11 @@ ALR CODEX LINKAGE:                KNOWN_FAIL:static-unhooked
 ALR PTY TMUX:                     PASS
 PRELOAD UNIX SOCKET PATH:         PASS   ← bind/connect 재작성 + 추상 소켓 통과 (대조)
 PRELOAD PATH COVERAGE:            PASS   ← xattr/inotify/pathconf/getsockname/nftw/setmntent/glob
+RESOLV SERVICE PORT:              PASS   ← numeric=8080 named=80 none=0
+CLI LIST HONOURS CONFIG ROOT:     PASS
+CLI VERSION HONOURS -d:           PASS
+ALR DPKG DEB BUILD:               PASS   ← setup 의 상태를 더 이상 버리지 않는다
+ROOTFS DPKG LISTS PACKAGES:       PASS
 RESOLV HOSTS FILES:               PASS
 RESOLV AHOSTS FILES:              PASS
 RESOLV REVERSE FILES:             PASS

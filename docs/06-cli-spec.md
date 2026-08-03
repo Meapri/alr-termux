@@ -107,7 +107,7 @@ $ alr config set runtime.fakeroot true
 
 > ⚠️ **구현과 스펙이 다른 부분 — 실측 2026-08-03.** `alr doctor` 는 **플래그를 받지 않는다.** 이 문서가 적어 둔 `--json`·`--full` 은 구현된 적이 없고, `argv[1]` 은 **프로브 디렉토리**로 해석된다. 그래서 문서대로 `alr doctor --json` 을 치면 멀쩡한 기기에서 `probe dir --json` 으로 프로브가 실패해 **`VERDICT: NOT READY` 와 "design dead"** 라는 가짜 진단이 나왔다. 지금은 알 수 없는 옵션을 `reason=doctor-unknown-option` 으로 거절한다(exit 2). **`--json` 출력은 여전히 없다.**
 >
-> **P11·P12 도 구현되어 있지 않다** — [§G](01-platform-facts.md) 표에 그렇게 표시해 두었다.
+> **P11·P12 는 2026-08-04 에 구현됐다** — [§G](01-platform-facts.md) 표와 아래 §3.1 샘플 출력이 실측이다. 이 문장은 그 이전 상태를 적어 둔 것이었다.
 
 ### 3.1 출력 형식
 

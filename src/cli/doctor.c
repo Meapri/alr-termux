@@ -768,6 +768,17 @@ static void probe_phantom(void)
     int i, alive = 0;
     struct timespec ts = { 0, 400 * 1000 * 1000 };
 
+    /* Initialise the WHOLE array before forking anything.
+     *
+     * The loop below breaks on the first fork() failure, leaving the rest of
+     * kids[] as whatever was on the stack -- and both loops afterwards walk
+     * all N entries and act on anything > 0.  So on a device that runs out of
+     * processes, this probe would waitpid() and then SIGKILL arbitrary stack
+     * garbage interpreted as PIDs.  Running out of processes is precisely the
+     * condition this probe exists to detect, so the failure mode was aimed
+     * exactly at the machines it was written for. */
+    for (i = 0; i < N; i++) kids[i] = -1;
+
     for (i = 0; i < N; i++) {
         kids[i] = fork();
         if (kids[i] == 0) { alarm(5); pause(); _exit(0); }

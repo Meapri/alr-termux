@@ -364,7 +364,7 @@ path_traps=0 syscall_stops=9912
 ]
 
 
-def _run_decision(transcript, baseline):
+def _run_decision(transcript, baseline, extra_args=None, return_baseline=False):
     """Run the gate's decision logic on a transcript against a fixed baseline."""
     import tempfile
     global BASELINE
@@ -387,11 +387,28 @@ def _run_decision(transcript, baseline):
     buf = _io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            rc = main_with(["--from", tpath])
+            try:
+                rc = main_with(["--from", tpath] + list(extra_args or []))
+            except SystemExit as e:
+                # die() exits rather than returning, and the --update refusal
+                # goes through die().  Without this the first scenario that
+                # refuses aborts the whole self-test before it prints a verdict
+                # -- which is how it behaved for exactly one run.
+                rc = e.code if isinstance(e.code, int) else 2
+        written = None
+        if return_baseline:
+            try:
+                with open(bpath, encoding="utf-8") as bf: written = json.load(bf)
+            except Exception:
+                written = None
     finally:
         BASELINE = saved
         build_facts = saved_bf
-        os.unlink(tpath); os.unlink(bpath)
+        os.unlink(tpath)
+        try: os.unlink(bpath)
+        except OSError: pass
+    if return_baseline:
+        return rc, buf.getvalue(), written
     return rc, buf.getvalue()
 
 
@@ -433,6 +450,43 @@ def self_test():
             bad += 1
             for line in out.splitlines():
                 print("        | %s" % line)
+
+    # --update must never absorb a REAL failure.
+    #
+    # The guard used to read
+    #     if failed and not (args.allow_new_device and failed == 1 and new_device)
+    # and the "new device" FAIL is only counted into `failed` when
+    # --allow-new-device is ABSENT.  So with the flag set, `failed == 1` meant
+    # one genuine hard failure -- and `new_device` was still truthy, so the
+    # exemption fired and the baseline was written from a failing run.  On the
+    # documented first-baseline command, no less.
+    #
+    # Scenario: a device with no baseline (so --allow-new-device is needed) AND
+    # a violated supervisor invariant.  It must refuse, and must not write.
+    upd = """\
+ALR BENCH DEVICE: SELFTEST-NEW/plat/android16/6.6
+  PRELOAD RW PINNED 1 cpu=0
+    PRELOAD RW ABS COST          58.8 ns  (ref <=  100)  RECORDED
+    PRELOAD RW REL COST           4.4 ns  (ref <=   20)  RECORDED
+    PRELOAD RW SYSDIR COST       13.8 ns  (ref <=   40)  RECORDED
+    PRELOAD RW UNDER COST        53.4 ns  (ref <=  100)  RECORDED
+    PRELOAD RW TOTAL COST       46.3 us  <= 1500  PASS
+    PRELOAD RW CALLS 10101
+path_traps=7 syscall_stops=0
+"""
+    rc, out, written = _run_decision(upd, base,
+                                     ["--allow-new-device", "--update"],
+                                     return_baseline=True)
+    wrote_new = bool(written and "SELFTEST-NEW/plat/android16/6.6"
+                     in written.get("devices", {}))
+    ok = rc != 0 and not wrote_new
+    print("  %-28s %s  --update refuses a real failure even with "
+          "--allow-new-device -> rc=%d wrote=%s"
+          % ("decision", "ok  " if ok else "FAIL", rc, wrote_new))
+    if not ok:
+        bad += 1
+        for line in out.splitlines():
+            print("        | %s" % line)
 
     # Negative control: refusals must produce no facts at all.
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
@@ -654,13 +708,27 @@ def main_with(argv=None):
         # "rw_abs_ns 4334.7 > 93.0*2.50" still wrote 4334.7 into
         # bench/baseline.json and exited 1, so the NEXT run was green.  That is
         # a goalpost move implemented inside the gate.
-        if failed and not (args.allow_new_device and failed == 1 and new_device):
+        # NO EXEMPTION HERE.  The previous form was
+        #     if failed and not (args.allow_new_device and failed == 1 and new_device)
+        # and it had a hole exactly where it mattered: the "new device" FAIL is
+        # only counted into `failed` when --allow-new-device is ABSENT, so with
+        # the flag set `failed == 1` means one REAL hard failure -- and
+        # `new_device` was still truthy, so the exemption fired and wrote a
+        # baseline from a run whose supervisor invariant or per-op ceiling had
+        # just failed.  That is the documented first-baseline command
+        # (--allow-new-device --update), so the hole was on the path most
+        # likely to be taken on a brand-new device.
+        #
+        # The two cases are already disjoint without any special case:
+        #   without the flag -> the unbaselined device IS a failure, refuse
+        #   with the flag    -> it is not counted, so anything left is real
+        if failed:
             die("refusing --update on a failing run: %d hard check(s) failed. "
                 "Writing these numbers to the baseline would make the next run "
                 "green by redefining the reference -- the exact move this gate "
-                "exists to prevent. Fix the regression first, or pass "
-                "--allow-new-device if the only failure is an unbaselined "
-                "device." % failed)
+                "exists to prevent. Fix the regression first. (--allow-new-device "
+                "excuses ONLY an unbaselined device, never a failed check.)"
+                % failed)
         if device is None:
             die("--update needs a device identity. Run tests/device/bench.sh so "
                 "the output carries an 'ALR BENCH DEVICE:' line; a baseline "

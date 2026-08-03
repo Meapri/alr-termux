@@ -1388,6 +1388,11 @@ int chdir(const char *path) { P(path); NEED(chdir); return real_chdir(_p); }
 char *getcwd(char *buf, size_t sz)
 {
     char *r;
+    /* Every other wrapper calls this; getcwd was the one that did not, so a
+     * getcwd() reaching us before the constructor ran saw real_getcwd == NULL
+     * and returned ENOSYS -- and worse, g_root/g_root_len unset, which is the
+     * pre-main window (R14) the whole init dance exists to close. */
+    ensure_init();
     if (!real_getcwd) { errno = ENOSYS; return NULL; }
     r = real_getcwd(buf, sz);
     char g[ALR_PBUF];
@@ -2362,26 +2367,42 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len)
  * accept()/accept4() fill in the PEER address, which for a unix stream socket
  * is normally unnamed -- but a client that bound a path before connecting has
  * one, so they go through the same correction. */
-static void un_unrewrite(struct sockaddr *addr, socklen_t *len)
+static void un_unrewrite(struct sockaddr *addr, socklen_t *len, socklen_t cap)
 {
     struct sockaddr_un *un = (struct sockaddr_un *)addr;
+    size_t room, avail;
     char g[ALR_PBUF];
     const char *c;
     size_t n;
 
     if (!addr || !len || addr->sa_family != AF_UNIX) return;
     if (*len <= (socklen_t)offsetof(struct sockaddr_un, sun_path)) return;
+
+    /* CAP is what the caller actually allocated, captured BEFORE the call.
+     * *len afterwards is what the kernel WOULD have written and can exceed it,
+     * and sizeof(sun_path) is 108 regardless of either -- so scanning either
+     * of those reads past the caller's object.  The idiom
+     *     struct sockaddr sa; socklen_t l = sizeof sa;   // 16 bytes
+     *     getsockname(fd, &sa, &l);
+     * is common, and reading 108 bytes into it walks 92 bytes off the end. */
+    room = (size_t)cap > offsetof(struct sockaddr_un, sun_path)
+         ? (size_t)cap - offsetof(struct sockaddr_un, sun_path) : 0;
+    avail = (size_t)*len > offsetof(struct sockaddr_un, sun_path)
+          ? (size_t)*len - offsetof(struct sockaddr_un, sun_path) : 0;
+    if (avail < room) room = avail;
+    if (room > sizeof un->sun_path) room = sizeof un->sun_path;
+    if (room == 0) return;
     if (un->sun_path[0] == '\0') return;               /* abstract or unnamed */
 
-    /* The kernel may have truncated at the caller's buffer size; make sure we
-     * are looking at a NUL-terminated string before treating it as one. */
-    if (!memchr(un->sun_path, '\0', sizeof un->sun_path)) return;
+    /* Truncated by the caller's buffer: not a NUL-terminated path, leave it. */
+    if (!memchr(un->sun_path, '\0', room)) return;
 
     c = alr_guest_canon(un->sun_path, g_root, g_root_len, g, sizeof g);
     if (c == un->sun_path) return;                     /* not under the root */
 
     /* guest_canon only ever strips the prefix, so this never grows. */
     n = strlen(c);
+    if (n + 1 > room) return;                          /* would not fit back */
     memmove(un->sun_path, c, n + 1);
     *len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n + 1);
 }
@@ -2391,34 +2412,37 @@ static int (*real_getpeername)(int, struct sockaddr *, socklen_t *);
 
 int getsockname(int fd, struct sockaddr *addr, socklen_t *len)
 {
+    socklen_t cap = len ? *len : 0;     /* the caller's real buffer size */
     int r;
     ensure_init();
     if (!real_getsockname) real_getsockname = dlsym(RTLD_NEXT, "getsockname");
     if (!real_getsockname) { errno = ENOSYS; return -1; }
     r = real_getsockname(fd, addr, len);
-    if (r == 0) un_unrewrite(addr, len);
+    if (r == 0) un_unrewrite(addr, len, cap);
     return r;
 }
 
 int getpeername(int fd, struct sockaddr *addr, socklen_t *len)
 {
+    socklen_t cap = len ? *len : 0;     /* the caller's real buffer size */
     int r;
     ensure_init();
     if (!real_getpeername) real_getpeername = dlsym(RTLD_NEXT, "getpeername");
     if (!real_getpeername) { errno = ENOSYS; return -1; }
     r = real_getpeername(fd, addr, len);
-    if (r == 0) un_unrewrite(addr, len);
+    if (r == 0) un_unrewrite(addr, len, cap);
     return r;
 }
 
 int accept4(int fd, struct sockaddr *addr, socklen_t *len, int flags)
 {
+    socklen_t cap = len ? *len : 0;
     int r;
     ensure_init();
     if (!real_accept4) real_accept4 = dlsym(RTLD_NEXT, "accept4");
     if (!real_accept4) { errno = ENOSYS; return -1; }
     r = real_accept4(fd, addr, len, flags);
-    if (r >= 0) un_unrewrite(addr, len);
+    if (r >= 0) un_unrewrite(addr, len, cap);
     return r;
 }
 
@@ -2535,13 +2559,91 @@ done:
 /* Build a single-entry addrinfo list from a /etc/hosts hit.  Allocated with
  * malloc because the caller frees it with freeaddrinfo() -- R1 forbids malloc
  * on the PATH-REWRITE hot path, not here. */
+/* getaddrinfo()'s second argument, resolved to a port.
+ *
+ * hosts_addrinfo() hardcoded 0 and was never even PASSED the service, so every
+ * guest client that resolved a name out of /etc/hosts got port 0 and an
+ * immediate ECONNREFUSED: `curl localhost:8080`, psql -h localhost, redis-cli,
+ * python's socket.create_connection, every dev server anyone runs in the
+ * guest.  The BRIDGE path carries the service correctly, which is exactly why
+ * this hid -- it only bites the names answered from /etc/hosts, and localhost
+ * is the most common one there is.
+ *
+ * Numeric first, which covers the overwhelming majority and is the only form
+ * allowed under AI_NUMERICSERV.  Named services fall back to libc's
+ * getservbyname; that reads a copy of the IANA list, and Android ships the
+ * same one, so the answer is right even though the file is not the guest's. */
+static unsigned short serv_port(const char *service,
+                                const struct addrinfo *hints)
+{
+    char *end;
+    unsigned long v;
+    struct servent *se;
+    const char *proto;
+    int st;
+
+    if (!service || !*service) return 0;
+    v = strtoul(service, &end, 10);
+    if (end != service && *end == '\0' && v <= 65535) return (unsigned short)v;
+    if (hints && (hints->ai_flags & AI_NUMERICSERV)) return 0;
+
+    st = hints ? hints->ai_socktype : 0;
+    proto = st == SOCK_DGRAM ? "udp" : st == SOCK_STREAM ? "tcp" : NULL;
+
+    /* Parse the GUEST's /etc/services ourselves, through nss_open -- the same
+     * reason /etc/hosts and /etc/passwd are parsed here (§6.17): glibc's
+     * getservbyname reaches the file through an internal call LD_PRELOAD
+     * cannot see, so it would read ANDROID's copy.  MEASURED: falling back to
+     * libc returned port 0 for "http". */
+    {
+        char line[NSS_LINE];
+        FILE *f = nss_open("/etc/services");
+        unsigned short port = 0;
+        if (f) {
+            while (fgets(line, sizeof line, f)) {
+                char *h, *nm, *sp, *slash;
+                unsigned long v;
+                nss_chomp(line);
+                if ((h = strchr(line, '#'))) *h = '\0';
+                nm = line;
+                while (*nm == ' ' || *nm == '\t') nm++;
+                if (!*nm) continue;
+                sp = nm;
+                while (*sp && *sp != ' ' && *sp != '\t') sp++;
+                if (!*sp) continue;
+                *sp++ = '\0';
+                while (*sp == ' ' || *sp == '\t') sp++;
+                /* "<port>/<proto>", then optional aliases we do not need. */
+                if (!(slash = strchr(sp, '/'))) continue;
+                *slash++ = '\0';
+                {   char *e = slash;
+                    while (*e && *e != ' ' && *e != '\t') e++;
+                    *e = '\0';
+                }
+                if (strcmp(nm, service) != 0) continue;
+                if (proto && strcmp(slash, proto) != 0) continue;
+                v = strtoul(sp, NULL, 10);
+                if (v && v <= 65535) { port = (unsigned short)v; break; }
+            }
+            fclose(f);
+        }
+        if (port) return port;
+    }
+
+    /* Last resort.  Reads Android's copy of the same IANA list, which is
+     * usually right, and is still better than returning 0. */
+    se = getservbyname(service, proto);
+    return se ? (unsigned short)ntohs((unsigned short)se->s_port) : 0;
+}
+
 static int hosts_addrinfo(int af, const void *a4, const void *a6,
-                          const char *cname, const struct addrinfo *hints,
+                          const char *cname, const char *service,
+                          const struct addrinfo *hints,
                           struct addrinfo **out)
 {
     struct addrinfo *ai;
     int want_cname = hints && (hints->ai_flags & AI_CANONNAME);
-    unsigned short port = 0;
+    unsigned short port = serv_port(service, hints);
 
     ai = calloc(1, sizeof *ai);
     if (!ai) return EAI_MEMORY;
@@ -2619,7 +2721,7 @@ int getaddrinfo(const char *node, const char *service,
                               a4, a6, cn, sizeof cn);
         if (af) {
             lg("alr hosts: %s from /etc/hosts\n", node);
-            return hosts_addrinfo(af, a4, a6, cn, hints, out);
+            return hosts_addrinfo(af, a4, a6, cn, service, hints, out);
         }
     }
 

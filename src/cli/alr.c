@@ -631,6 +631,24 @@ static void relativize_tree(const char *dir, int depth, int *fixed, int *failed,
                 }
                 continue;
             }
+            /* An ABSOLUTE target with a `..` in it escapes just as surely, and
+             * the first version of this check missed the whole branch: the
+             * escape test sat only on the relative side, and `/../../etc/passwd`
+             * takes the other one.  Worse, alr_is_sysdir("/proc/../../etc")
+             * matches on the /proc prefix and would have left it verbatim.
+             *
+             * Rejected before relativization rather than after, because
+             * relativization is what turns it into the form the other branch
+             * would have caught -- checking only afterwards would mean the
+             * dangerous case is the one that got rewritten first. */
+            if (strstr(tgt, "/../") || !strcmp(tgt, "/..") ||
+                (strlen(tgt) > 3 && !strcmp(tgt + strlen(tgt) - 3, "/.."))) {
+                fprintf(stderr, "alr: REJECTING symlink that escapes the "
+                                "rootfs: %s -> %s\n", path, tgt);
+                unlink(path);
+                (*escaped)++;
+                continue;
+            }
             /* /proc, /sys and /dev are NOT rewritten at runtime either, so an
              * absolute target into them is already correct. */
             if (alr_is_sysdir(tgt)) continue;
@@ -922,11 +940,26 @@ static int install_preload(const char *R)
             char msrc[ALR_PBUF], mdst[ALR_PBUF];
             char *dot;
             chmod(dst, 0755);
-            /* The manifest lives beside whichever candidate we took. */
+            /* The manifest lives beside whichever candidate we took, under
+             * ONE OF TWO NAMES.  The build tree writes
+             * libalr_preload.manifest.json; the release tarball renames it to
+             * share/alr/manifest.json on purpose (that directory holds exactly
+             * one .so, so repeating its name is noise).  Deriving only the
+             * first name meant EVERY install from a published tarball printed
+             * "NOTE no manifest beside ..." and left the rootfs unable to say
+             * which build it carries -- on the single most common install
+             * path there is. */
+            snprintf(mdst, sizeof mdst, "%s/usr/lib/alr/libalr_preload.manifest.json", R);
             snprintf(msrc, sizeof msrc, "%s", cands[i]);
             if ((dot = strstr(msrc, ".so")) && dot[3] == '\0')
                 snprintf(dot, sizeof msrc - (size_t)(dot - msrc), ".manifest.json");
-            snprintf(mdst, sizeof mdst, "%s/usr/lib/alr/libalr_preload.manifest.json", R);
+            if (access(msrc, R_OK) != 0) {
+                char dir[ALR_PBUF], *slash;
+                snprintf(dir, sizeof dir, "%s", cands[i]);
+                if ((slash = strrchr(dir, '/'))) *slash = '\0';
+                else snprintf(dir, sizeof dir, ".");
+                snprintf(msrc, sizeof msrc, "%s/manifest.json", dir);
+            }
             if (access(msrc, R_OK) == 0 && copy_file(msrc, mdst) == 0)
                 chmod(mdst, 0644);
             else
@@ -1044,7 +1077,7 @@ static void file_sha256(const char *path, char *out, size_t outsz)
     (void)outsz;
 }
 
-static int cmd_version(void)
+static int cmd_version(const char *distro)
 {
     char path[ALR_PBUF], cmd[ALR_PBUF + 64], sha[80];
     FILE *fp;
@@ -1095,7 +1128,11 @@ static int cmd_version(void)
      * $PREFIX/share/alr/manifest.json against this output, and both sides read
      * $PREFIX.  That is a tautology.  Compare against the GUEST copy. */
     { char r[ALR_PBUF], gp[ALR_PBUF], gsha[80];
-      distro_root(r, sizeof r, getenv("ALR_DISTRO"));
+      /* The distro main() resolved -- -d, then ALR_DISTRO, then the config's
+       * default_distro.  Reading the environment directly here made the
+       * preload-staleness check inspect a DIFFERENT rootfs than the one the
+       * user named, and report a mismatch or a clean bill about the wrong one. */
+      distro_root(r, sizeof r, distro);
       printf("rootfs  %s%s\n", r, is_dir(r) ? "" : "  (not installed)");
       if (is_dir(r)) {
           snprintf(gp, sizeof gp, "%s/usr/lib/alr/libalr_preload.so", r);
@@ -1199,12 +1236,17 @@ static int verify_rootfs(const char *R)
 /* `alr list` -- docs/06-cli-spec.md §1, docs/05-provisioning-spec.md §6. */
 static int cmd_list(void)
 {
+    /* Same resolution order as distro_root(): env, then paths.root from the
+     * config, then the built-in.  `alr list` read only the environment, so
+     * after `alr config set paths.root X` every other subcommand used X and
+     * this one reported "no rootfs installed" about a different directory. */
     const char *root = getenv("ALR_ROOT_DIR");
     char dir[ALR_PBUF], p[ALR_PBUF];
     DIR *d;
     struct dirent *e;
     int n = 0;
 
+    if (!root || !*root) root = cfg()->has_root ? cfg()->root : NULL;
     if (root && *root) snprintf(dir, sizeof dir, "%s", root);
     else snprintf(dir, sizeof dir, "%s/var/lib/alr/distros", prefix());
 
@@ -1243,7 +1285,11 @@ static int cmd_list(void)
 static int cmd_remove(const char *distro, int force)
 {
     char R[ALR_PBUF], so[ALR_PBUF];
-    char ans[16];
+    /* A distro name may be up to the filesystem's limit; 16 bytes here meant
+     * fgets() truncated at 15 and strcmp() could never match a longer name, so
+     * such a rootfs was undeletable without --force.  Size it to the same
+     * bound the name itself has. */
+    char ans[ALR_PBUF];
 
     if (!distro || !*distro) die("bad-distro-name", "remove needs a distro name");
     distro_root(R, sizeof R, distro);          /* validates the name */
@@ -1459,6 +1505,64 @@ static int install_verify(const char *distro, const char *R,
     return bad;
 }
 
+/* `--with git,node,codex`, for both a fresh rootfs and an existing one.
+ *
+ * Returns the number of components that failed.  It used to print a line per
+ * failure and return nothing, so `alr install --with git` reported success
+ * having installed no git -- and `&&` reads the exit status, not the line. */
+static int with_components(const char *distro, const char *R, const char *cache)
+{
+    int bad = 0;
+
+    /* apt must run before the HTTPS fetches: ubuntu-base ships no
+     * ca-certificates, and nodejs.org / GitHub are both HTTPS. */
+    if (strstr(g_with, "git") || strstr(g_with, "node") || strstr(g_with, "codex")) {
+        static const char *upd[] = { "/usr/bin/apt-get", "update", NULL };
+        static const char *ins[] = { "/usr/bin/apt-get", "install", "-y",
+                                     "--no-install-recommends",
+                                     "ca-certificates", "xz-utils", NULL };
+        guest_run(distro, upd, 1);
+        guest_run(distro, ins, 1);
+    }
+    if (strstr(g_with, "git")) {
+        static const char *g[] = { "/usr/bin/apt-get", "install", "-y",
+                                   "--no-install-recommends", "git", NULL };
+        if (guest_run(distro, g, 1) != 0) {
+            fprintf(stderr, "alr: git install failed\n"); bad++;
+        }
+    }
+    if (strstr(g_with, "node")  && with_node(R, cache) != 0) {
+        fprintf(stderr, "alr: node install failed\n"); bad++;
+    }
+    if (strstr(g_with, "codex") && with_codex(R, cache) != 0) {
+        fprintf(stderr, "alr: codex install failed\n"); bad++;
+    }
+    return bad;
+}
+
+/* Remove the staging directory and then fail.
+ *
+ * `<R>.part` used to be left behind by every failure after extraction --
+ * traversal reject, missing preload, rootfs-incomplete, a failed rename.  It
+ * is not inert: the next `alr install` mkdir -p's the same path and untars
+ * ONTO it, so files from a REJECTED archive -- including one rejected for
+ * carrying symlinks out of the rootfs -- survive into a subsequent install
+ * that then reports every check green.  A staging directory that outlives the
+ * attempt it staged is not staging.
+ *
+ * Best-effort by design: if the removal fails there is nothing better to do
+ * than say so and still fail the install, which is what the caller does. */
+static void die_staged(const char *part, const char *reason, const char *msg)
+{
+    char *rm[4];
+    rm[0] = (char *)"rm"; rm[1] = (char *)"-rf";
+    rm[2] = (char *)part; rm[3] = NULL;
+    if (run_cmd(rm) != 0)
+        fprintf(stderr, "alr: WARNING could not remove the staging directory "
+                        "%s; remove it before installing again\n", part);
+    die(reason, msg);
+}
+
 static int cmd_install(const char *distro, const char *url_override)
 {
     char R[ALR_PBUF], part[ALR_PBUF], tarball[ALR_PBUF], cache[ALR_PBUF];
@@ -1489,15 +1593,23 @@ static int cmd_install(const char *distro, const char *url_override)
          * `alr install -d x --with node && alr run node` failed confusingly.
          * Say what was ignored and what to do instead. */
         fprintf(stderr, "alr: %s already installed\n", R);
-        if (g_with)
-            fprintf(stderr,
-                "  NOTE --with %s was IGNORED: this rootfs already exists.\n"
-                "  reason=already-installed\n"
-                "  Install components into it with `alr run apt-get install ...`,\n"
-                "  or remove the rootfs and install again.\n", g_with);
         fprintf(stderr,
             "  (to refresh the guest preload after upgrading alr:"
             " `alr update-components`)\n");
+        if (!g_with) return 0;
+        /* --with on an existing rootfs used to print a NOTE and exit 0.  Exit 0
+         * is what `&&` reads, so
+         *     alr install --with git && alr run git status
+         * ran the second command against a rootfs with no git and failed with
+         * boot-enoent -- the NOTE having scrolled past.  The user asked for
+         * components; either deliver them or fail. */
+        fprintf(stderr,
+            "alr: installing --with %s into the existing rootfs\n", g_with);
+        rc = with_components(distro, R, cache);
+        if (rc != 0)
+            die("with-failed",
+                "the rootfs is intact but the requested components did not "
+                "all install");
         return 0;
     }
 
@@ -1603,9 +1715,9 @@ static int cmd_install(const char *distro, const char *url_override)
         if (failed) fprintf(stderr, "alr: WARNING %d symlink(s) left absolute; "
                                     "they will not resolve inside the guest\n", failed);
         if (escaped)
-            die("extract-traversal-reject",
+            die_staged(part, "extract-traversal-reject",
                 "the archive contains symlinks pointing outside the rootfs; "
-                "they were removed and nothing was installed");
+                "nothing was installed and the staging directory was removed");
     }
 
     {   /* setuid/setgid bits are inert on /data (nosuid) and only produce
@@ -1634,17 +1746,18 @@ static int cmd_install(const char *distro, const char *url_override)
      * while every message said the install worked.  reason=preload-install-failed
      * already exists (cmd_update_components emits it). */
     if (install_preload(part) != 0)
-        die("preload-install-failed",
+        die_staged(part, "preload-install-failed",
             "the rootfs would run WITHOUT path virtualization");
 
     /* Check BEFORE the rename: a rootfs that fails this must never appear at
      * the real path, where the next `alr run` would pick it up. */
     if (verify_rootfs(part) != 0)
-        die("rootfs-incomplete",
+        die_staged(part, "rootfs-incomplete",
             "extraction did not produce a usable rootfs (truncated or "
             "corrupt tarball?); nothing was installed");
 
-    if (rename(part, R) != 0) die("extract-permission", "rename into place failed");
+    if (rename(part, R) != 0)
+        die_staged(part, "extract-permission", "rename into place failed");
     printf("alr: installed %s\n", R);
 
     divert_ldconfig(distro, R);
@@ -1654,28 +1767,10 @@ static int cmd_install(const char *distro, const char *url_override)
             "the rootfs extracted but does not boot; it was LEFT IN PLACE for "
             "inspection (docs/05-provisioning-spec.md §4)");
 
-    if (g_with && *g_with) {
-        /* apt must run before the HTTPS fetches: ubuntu-base ships no
-         * ca-certificates, and nodejs.org / GitHub are both HTTPS. */
-        if (strstr(g_with, "git") || strstr(g_with, "node") || strstr(g_with, "codex")) {
-            static const char *upd[] = { "/usr/bin/apt-get", "update", NULL };
-            static const char *ins[] = { "/usr/bin/apt-get", "install", "-y",
-                                         "--no-install-recommends",
-                                         "ca-certificates", "xz-utils", NULL };
-            guest_run(distro, upd, 1);
-            guest_run(distro, ins, 1);
-        }
-        if (strstr(g_with, "git")) {
-            static const char *g[] = { "/usr/bin/apt-get", "install", "-y",
-                                       "--no-install-recommends", "git", NULL };
-            if (guest_run(distro, g, 1) != 0)
-                fprintf(stderr, "alr: git install failed\n");
-        }
-        if (strstr(g_with, "node")  && with_node(R, cache) != 0)
-            fprintf(stderr, "alr: node install failed\n");
-        if (strstr(g_with, "codex") && with_codex(R, cache) != 0)
-            fprintf(stderr, "alr: codex install failed\n");
-    }
+    if (g_with && *g_with && with_components(distro, R, cache) != 0)
+        die("with-failed",
+            "the rootfs installed but the requested components did not all "
+            "install");
     return 0;
 }
 
@@ -2382,6 +2477,26 @@ static int cmd_run(const char *distro, int argc, char **argv, int login_shell,
     o.log_level = g_log;
     o.log_fd = -1;
 
+    /* Ubuntu's default umask, not Termux's.
+     *
+     * Termux runs with umask 077, and the guest inherited it, so every
+     * directory a guest program created came out 0700.  MEASURED: that alone
+     * breaks `dpkg-deb -b` --
+     *     dpkg-deb: error: control directory has bad permissions 700
+     *                      (must be >=0755 and <=0775)
+     * -- and with it every package build, and anything else that creates a
+     * directory expecting the 022 every Linux distribution defaults to.
+     *
+     * cmd_install already does exactly this around extraction, for exactly
+     * this reason (the note there records dpkg reporting "'sh' not found in
+     * PATH or not executable" for files that plainly were).  The guest is an
+     * Ubuntu userspace; it should boot with Ubuntu's default.
+     *
+     * Nothing is loosened in practice: the whole rootfs lives under the app's
+     * private data directory, which Android keeps at 0700, so 077 inside it
+     * protects against nobody and costs the tooling. */
+    umask(022);
+
     if (ro && ro->no_supervisor) {
         /* §1.1 marks this 위험 and says it usually fails to boot -- and it
          * does: ld.so calls set_robust_list before any constructor runs, the
@@ -2508,8 +2623,16 @@ int main(int argc, char **argv)
     }
     if (!strcmp(argv[i], "config"))
         return cmd_config(argc - i - 1, argv + i + 1);
-    if (!strcmp(argv[i], "version") || !strcmp(argv[i], "--version"))
-        return cmd_version();
+    if (!strcmp(argv[i], "version") || !strcmp(argv[i], "--version")) {
+        /* `alr version -d <name>` and `alr -d <name> version` both work: the
+         * global loop above already consumed the leading form, this catches
+         * the trailing one. */
+        int j;
+        for (j = i + 1; j + 1 < argc; j++)
+            if (!strcmp(argv[j], "-d") || !strcmp(argv[j], "--distro"))
+                distro = argv[j + 1];
+        return cmd_version(distro);
+    }
     if (!strcmp(argv[i], "list"))
         return cmd_list();
     if (!strcmp(argv[i], "remove")) {

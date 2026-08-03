@@ -16,6 +16,7 @@ cd "$(dirname "$0")/../.." 2>/dev/null || true
 ALR=${ALR:-./alr}
 export ALR_ROOT_DIR=${ALR_ROOT_DIR:-$HOME/alr-distros}
 R="$ALR_ROOT_DIR/${ALR_DISTRO:-ubuntu-24.04}"
+ALR_DISTRO_NAME="${ALR_DISTRO:-ubuntu-24.04}"
 
 pass=0; fail=0; known=0; skip=0; pending=0
 
@@ -34,11 +35,23 @@ emit() { # emit <NAME> <PASS|FAIL|SKIP|KNOWN_FAIL:reason> [detail]
 
 # ck <NAME> <expected> <command...>   — compares exact stdout
 ck() { local n="$1" want="$2"; shift 2
+    if [ -z "$want" ]; then
+        emit "$n" FAIL "unfalsifiable check: empty expectation"
+        return
+    fi
     local got; got=$("$@" 2>/dev/null | head -1)
     [ "$got" = "$want" ] && emit "$n" PASS || emit "$n" FAIL "got='$got' want='$want'"
 }
 # ckc <NAME> <substring> <command...> — substring match
 ckc() { local n="$1" want="$2"; shift 2
+    # An empty needle matches everything: `case "$got" in *""*)` is always
+    # true, so `ckc NAME "" cmd` is a check that CANNOT FAIL.  One shipped
+    # (ALR GIT STATUS 10K) and passed against a repo the harness never created.
+    # Refuse it here rather than trusting every future caller to notice.
+    if [ -z "$want" ]; then
+        emit "$n" FAIL "unfalsifiable check: empty expectation matches any output"
+        return
+    fi
     # search the WHOLE output: warnings (perl locale, apt notices) precede the
     # line we care about, so matching only the first line reports false FAILs
     local got; got=$("$@" 2>&1)
@@ -239,15 +252,35 @@ ckc "ALR LDSO INVOKE"    "Ubuntu GLIBC"  $ALR run /usr/bin/ldd --version
 ck  "ALR PIPELINE"       ok       $ALR run /bin/bash -c 'echo ok | /bin/cat | /usr/bin/head -1'
 ckc "ALR FAKEROOT IDENTITY" "uid=0" env ALR_FAKEROOT=1 $ALR run /usr/bin/id
 # NOT -qq: that is quiet by design and prints none of the lines this asserts.
-ckc "ALR APT UPDATE"     "ports.ubuntu.com" \
+# Was: matched "ports.ubuntu.com", which apt also prints in EVERY failure
+# message ("Failed to fetch http://ports.ubuntu.com/..."). Assert the outcome
+# apt only prints on success.
+ckc "ALR APT UPDATE"     "Reading package lists" \
     env ALR_FAKEROOT=1 $ALR run /usr/bin/apt-get update
 # The workload the copy fallback exists for -- ADR 0004's own test matrix opens
 # with it and it had never been run.
-$ALR run /bin/bash -c 'cd /tmp && rm -rf dpkgt && mkdir -p dpkgt/DEBIAN &&
+# The setup's own status is NOT discarded any more.  It used to be, and it was
+# failing the whole time -- `dpkg-deb -b` refuses a control directory with mode
+# 0700, which is what Termux's umask 077 produced inside the guest until alr
+# started booting it with Ubuntu's 022.  The check above still passed, because
+# its needle "alrtest" also appears in dpkg's "cannot access archive
+# /tmp/alrtest.deb" error.  Two independent holes, agreeing.
+_debsetup=$($ALR run /bin/bash -c 'cd /tmp && rm -rf dpkgt alrtest.deb &&
+    mkdir -p dpkgt/DEBIAN &&
     printf "Package: alrtest\nVersion: 1\nArchitecture: all\nMaintainer: t\nDescription: t\n" \
-      > dpkgt/DEBIAN/control && dpkg-deb -b dpkgt /tmp/alrtest.deb' >/dev/null 2>&1
-ckc "ALR DPKG LOCAL INSTALL" "alrtest" \
-    env ALR_FAKEROOT=1 $ALR run /usr/bin/dpkg -i /tmp/alrtest.deb
+      > dpkgt/DEBIAN/control && dpkg-deb -b dpkgt /tmp/alrtest.deb' 2>&1)
+if [ $? -ne 0 ]; then
+    emit "ALR DPKG DEB BUILD" FAIL "$(printf '%s' "$_debsetup" | tail -1)"
+else
+    emit "ALR DPKG DEB BUILD" PASS
+fi
+# Was: matched "alrtest", a substring of the path dpkg echoes back on ERROR
+# too ("cannot access archive /tmp/alrtest.deb"), with the .deb-building
+# setup's own status discarded.  Assert the database instead: the package is
+# only listed as installed if dpkg actually did it.
+ckc "ALR DPKG LOCAL INSTALL" "install ok installed" \
+    env ALR_FAKEROOT=1 $ALR run /bin/sh -c \
+    'dpkg -i /tmp/alrtest.deb >/dev/null 2>&1; dpkg-query -W -f="\${Status}" alrtest'
 # git clone --local is the other hardlink-heavy path (ADR 0004).
 $ALR run /bin/bash -c 'rm -rf /tmp/gsrc /tmp/gdst && mkdir -p /tmp/gsrc && cd /tmp/gsrc &&
     git init -q . && echo x > a && git add -A &&
@@ -268,7 +301,17 @@ $ALR run /bin/bash -c 'printf "#!/bin/sh\necho deep-ok\n" > /tmp/s1 &&
 ck  "PRELOAD EXEC SHEBANG RECURSION" deep-ok  $ALR run /tmp/s2
 
 # More docs/07 §2 names that carried PASS with no runner.
-ckc "ALR GIT STATUS 10K" "" $ALR run /usr/bin/git -C /tmp/bigrepo status --porcelain
+# Was: ckc "ALR GIT STATUS 10K" "" -- an empty needle, against /tmp/bigrepo,
+# which nothing in this file creates.  It passed with git deleted from the
+# rootfs.  Build the repo, then assert git actually walked it: `status
+# --porcelain` on a clean tree prints NOTHING, so the falsifiable assertion is
+# the rc plus a count from `status --porcelain` after a modification.
+$ALR run /bin/sh -c 'rm -rf /tmp/bigrepo && mkdir -p /tmp/bigrepo && cd /tmp/bigrepo &&
+    git init -q . && for i in $(seq 1 200); do echo x > f$i; done &&
+    git add -A && git -c user.email=a@b -c user.name=c commit -qm init &&
+    echo changed > f7 && echo new > untracked' >/dev/null 2>&1
+ckc "ALR GIT STATUS 10K" " M f7" \
+    $ALR run /usr/bin/git -C /tmp/bigrepo status --porcelain
 # git hooks are a shebang+exec path through the guest, which is exactly what
 # ADR 0002's loader invocation has to get right.
 $ALR run /bin/bash -c 'cd /tmp/gsrc 2>/dev/null || exit 0;
@@ -276,8 +319,21 @@ $ALR run /bin/bash -c 'cd /tmp/gsrc 2>/dev/null || exit 0;
     chmod +x .git/hooks/pre-commit' >/dev/null 2>&1
 ckc "ALR GIT HOOKS" "hook-ran" $ALR run /bin/bash -c \
     'cd /tmp/gsrc && echo y >> a && git add -A && git -c user.email=a@b -c user.name=c commit -m h'
-ckc "ALR GIT CLONE HTTPS" "done" $ALR run /bin/bash -c \
-    'rm -rf /tmp/ghttps && git clone -q --depth 1 https://github.com/git/git /tmp/ghttps 2>&1 | tail -1; echo done'
+# Was: matched "done", which the command's own trailing `; echo done` prints
+# unconditionally -- it passed with no network, no git, and no clone.  Assert
+# the artifact instead: a successful clone leaves a readable HEAD.
+if $ALR run /bin/sh -c 'command -v git >/dev/null' >/dev/null 2>&1; then
+    $ALR run /bin/bash -c \
+        'rm -rf /tmp/ghttps && git clone -q --depth 1 https://github.com/git/git /tmp/ghttps' \
+        >/dev/null 2>&1
+    if $ALR run /bin/sh -c '[ -f /tmp/ghttps/.git/HEAD ]' >/dev/null 2>&1; then
+        ckc "ALR GIT CLONE HTTPS" "ref:" $ALR run /bin/cat /tmp/ghttps/.git/HEAD
+    else
+        emit "ALR GIT CLONE HTTPS" SKIP "clone did not complete (no network?)"
+    fi
+else
+    emit "ALR GIT CLONE HTTPS" SKIP "git not installed"
+fi
 # dlopen with an absolute guest path must be rewritten like any other path.
 ckc "PRELOAD DLOPEN ABS PATH" "ok" $ALR run /usr/bin/python3 -c \
     'import ctypes; ctypes.CDLL("/lib/aarch64-linux-gnu/libm.so.6"); print("ok")'
@@ -354,6 +410,21 @@ else
     emit "PRELOAD PATH COVERAGE" SKIP "no libc6-dev in the guest"
 fi
 
+# getaddrinfo's SERVICE argument was dropped for every name answered from
+# /etc/hosts -- port 0, instant ECONNREFUSED, for `curl localhost:8080` and
+# every database client and dev server in the guest.  The three RESOLV checks
+# above could not see it: they compare ADDRESSES, never a port.
+if [ -r "$R/usr/include/stdio.h" ]; then
+    cp tests/device/probe_getaddrinfo_port.c "$R/tmp/probe_gaiport.c" 2>/dev/null
+    if $ALR run /usr/bin/gcc -O1 -o /tmp/probe_gaiport /tmp/probe_gaiport.c >/dev/null 2>&1; then
+        ck "RESOLV SERVICE PORT" "numeric=8080 named=80 none=0" $ALR run /tmp/probe_gaiport
+    else
+        emit "RESOLV SERVICE PORT" SKIP "probe did not compile"
+    fi
+else
+    emit "RESOLV SERVICE PORT" SKIP "no libc6-dev in the guest"
+fi
+
 # ── alr doctor P11/P12 (docs/01-platform-facts.md §D) ───────────────────
 # P11 and P12 sat in that table as design for the life of the project and were
 # never implemented; other documents meanwhile claimed "P1~P12 를 전부 실행한다"
@@ -403,6 +474,18 @@ else
         emit "$n" SKIP "alr-doctor not built"
     done
 fi
+
+# `alr list` read only ALR_ROOT_DIR, so after `alr config set paths.root X`
+# every other subcommand used X and this one reported "no rootfs installed".
+_lh="$ALR_ROOT_DIR/alrlisthome"; rm -rf "$_lh"; mkdir -p "$_lh"
+env HOME="$_lh" $ALR config set paths.root "$ALR_ROOT_DIR" >/dev/null 2>&1
+ckc "CLI LIST HONOURS CONFIG ROOT" "$ALR_DISTRO_NAME" \
+    env HOME="$_lh" ALR_ROOT_DIR= $ALR list
+# `alr version` resolved the rootfs from ALR_DISTRO alone, so -d inspected a
+# different rootfs than the one named and reported on the wrong preload.
+ckc "CLI VERSION HONOURS -d" "alrnosuchdistro" \
+    $ALR version -d alrnosuchdistro
+rm -rf "$_lh"
 
 # ── alr config (docs/06-cli-spec.md §2) ─────────────────────────────────
 # Run under a scratch HOME so this never touches the user's real
@@ -529,6 +612,12 @@ ckc "ROOTFS AWK RESOLVES" "awkok" $ALR run /usr/bin/awk 'BEGIN{print "awkok"}'
 n=$(grep -c '^/usr/sbin/ldconfig$' "$R/var/lib/dpkg/diversions" 2>/dev/null)
 [ "${n:-0}" -ge 1 ] && emit "ROOTFS LDCONFIG DIVERTED" PASS \
                     || emit "ROOTFS LDCONFIG DIVERTED" FAIL "no diversion registered"
+# Was: expected rc=1 from `dpkg -l | grep -q "^i[^i]"`.  grep returns 1 when
+# it matches nothing -- including when dpkg is absent and the output is empty,
+# so deleting dpkg from the rootfs produced the same PASS as a healthy one.
+# Two assertions now: dpkg must actually list packages, and none may be in a
+# half-configured state.
+ckc "ROOTFS DPKG LISTS PACKAGES" "ii " $ALR run /bin/sh -c 'dpkg -l | head -20'
 ckrc "ROOTFS NO BROKEN PACKAGES" 1 \
     $ALR run /bin/sh -c 'dpkg -l 2>/dev/null | grep -q "^i[^i]"' 
 

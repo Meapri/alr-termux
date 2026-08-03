@@ -264,7 +264,9 @@ int mkstemp(char *tmpl)
 ```
 `h == hbuf` 검사가 핵심이다 — `rw()`는 상대경로/sysdir/이미-rootfs-아래인 경우 **원본 포인터를 그대로 반환**하므로 그때는 되돌려 쓸 것이 없다.
 
-### 6.15 fd 상태 (→ §12 `/dev/full`)
+### 6.15 fd 상태 (→ §12 `/dev/full`) — ⛔ **구현하지 않음**
+
+> 아래 열두 개는 `src/preload/wrappers.def` 의 `DELIBERATELY NOT IMPLEMENTED` 블록에 있다. [§12](#12-devfull-에뮬레이션) 의 정정을 볼 것. 커버리지 감사에서 **누락 심볼로 세지 말 것.**
 
 `write`, `pwrite`, `pwrite64`, `writev`, `pwritev`, `pwritev2`
 그리고 stdio 표면: `fwrite`, `fputs`, `fputc`, `fprintf`, `vfprintf`, `fflush`
@@ -384,6 +386,10 @@ glibc 2.34+ 는 `files` 백엔드를 libc 에 내장했고, 리터럴 `/etc/pass
 `link(2)`가 앱 데이터에서 `EACCES`로 실패한다 ([§B6](01-platform-facts.md)). **errno가 `EACCES`이지 `EPERM`/`EXDEV`가 아니라는 점이 중요하다** — 게스트의 폴백 코드는 대개 `EXDEV`만 잡으므로 발동하지 않는다.
 
 깨지는 것: `dpkg -i`(하드링크 tar 멤버), `git clone --local`(객체 하드링크), `pnpm`(콘텐츠 주소 저장소 전체).
+
+> ⛔ **정정 (2026-08-03, [ADR 0004](adr/0004-link2symlink.md)).** 아래 §8.1 이 적은 **shadow 디렉토리 방식은 채택되지 않았다.** 실제로 구현된 것은 그 ADR 이 대안으로 검토했던 **copy + `lid_record`** 쪽이다. §8.2 의 함께-인터포즈 목록과 §8.4 의 테스트 매트릭스는 그대로 유효하다.
+>
+> `alr` 은 게스트에서 `link(2)` 가 되는지 먼저 보고(§8.3 이 "무조건 켜짐" 이라 적은 것은 정확하지 않다), 안 될 때만 이 계층이 동작한다 — 수용 시험의 `PRELOAD LINK FALLBACK` 이 그 경로다.
 
 ### 8.1 알고리즘
 
@@ -552,6 +558,13 @@ PTY 슬레이브의 ioctl은 13개 화이트리스트뿐이다 ([§B5](01-platfo
 생 `EACCES`를 그대로 돌려주면 readline/ncurses 깊은 곳에서 이해 불가능한 실패가 난다.
 
 ## 12. `/dev/full` 에뮬레이션
+
+> ⛔ **정정 (2026-08-03, 영구 비목표).** 아래 절과 [§6.15](#615-fd-상태--12-devfull) 의 열두 개 심볼은 **구현하지 않으며, 앞으로도 하지 않는다.** [RISKS](RISKS.md) · [00 §5](00-product.md) · `src/preload/wrappers.def` 의 `DELIBERATELY NOT IMPLEMENTED` 블록 · `alr doctor` 의 `[P9] EXPECTED (non-goal, not emulated)` 가 모두 같은 결정을 기록한다. 수용 시험은 `PRELOAD DEV FULL ENOSPC: KNOWN_FAIL:non-goal-devfull` 로 이 상태를 감시한다.
+>
+> **왜 남겨 두는가**: 설계 근거를 지우면 다음 사람이 같은 길을 다시 판다. **왜 하지 않는가**: `/dev/full` 하나를 위해 프로세스에서 가장 뜨거운 시스템콜인 `write()` 를 인터포즈해야 하고, stdio 심볼을 하나라도 빠뜨리면 **성공한 쓰기로 조용히 위장**된다. 얻는 것은 `/dev/full` 을 쓰는 테스트 스위트 하나이고, 거는 것은 모든 게스트의 모든 쓰기다.
+>
+> **[§6](#6-래퍼-심볼-표) 이 `wrappers.def` 를 단일 정본이라 선언한다.** §6.15 는 그 정본과 어긋나 있었고, 이 정정이 그 어긋남을 닫는다.
+
 
 `/dev/full`은 sepolicy 타입이 없어 **모든 도메인에서 `EACCES`**다 ([§B5](01-platform-facts.md)). 스톡 Ubuntu와 그 테스트 스위트들이 존재를 가정한다.
 

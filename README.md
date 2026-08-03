@@ -4,10 +4,10 @@
 독립형 런타임 + CLI다. 목표 워크로드는 `git`, `node`/`npm`, `make`, `apt` 같은 평범한 Linux CLI 프로그램을
 폰의 CPU 성능 그대로 돌리는 것이다.
 
-> **선행 릴리스 (v0.4.2).** 참조 디바이스는 **2대 — MediaTek(커널 6.1)과 Snapdragon 8 Elite(커널 6.6),
+> **선행 릴리스 (v0.4.3).** 참조 디바이스는 **2대 — MediaTek(커널 6.1)과 Snapdragon 8 Elite(커널 6.6),
 > 둘 다 Android 16**. 두 기기의 zygote 차단 syscall **239개 집합이 완전히 동일하고**, 호환성 폭
 > 96/96 도 같다 ([M19](docs/evidence/2026-08-03-m19-snapdragon.md)). **SoC 벤더·커널 축은 닫혔다.**
-> 수용 시험 **153건 PASS / 0 FAIL**, 설치 게이트 18건, 디바이스 없이 도는 호스트 게이트 10종.
+> 수용 시험 **158건 PASS / 0 FAIL**, 설치 게이트 18건, 디바이스 없이 도는 호스트 게이트 10종.
 > (**OEM 축은 아니다** — 두 기기 다 Samsung 이고, 다른 OEM 기기를 구할 수단이 없어 **앞으로도 못 잰다.**
 > 다른 OEM 이 안 된다는 뜻이 아니라 **우리가 확인해 주지 못한다**는 뜻이다.)
 >
@@ -31,11 +31,20 @@
 
 ```bash
 alr-doctor                  # 기기 능력 진단 (첫 실행에 한 번)
-alr install                 # Ubuntu 24.04 rootfs 프로비저닝
+alr install --with git      # Ubuntu 24.04 rootfs + git
 alr run git status          # 게스트에서 명령 하나
 alr shell                   # 게스트 bash 진입
 alr version                 # 버전 / preload 경로 / preload sha256 / rootfs 경로
 ```
+
+> **`--with git` 를 뺀 `alr install` 로 시작하지 말 것.** ubuntu-base 는 최소 이미지라 **git 이 없다** — 그냥 `alr install` 한 뒤 `alr run git status` 를 치면 `reason=boot-enoent` 로 죽는다. 이 README 의 이전 판이 정확히 그 두 줄이었다.
+>
+> 이미 rootfs 를 깔았다면 나중에 넣는 명령은 이것이다 — **`--fakeroot` 가 필요하다.** apt/dpkg 는 uid 0 을 요구하고, alr 은 그걸 기본으로 켜지 않는다:
+> ```bash
+> alr run --fakeroot apt-get update
+> alr run --fakeroot apt-get install -y git
+> ```
+> 또는 한 번만 켜 두려면 `alr config set runtime.fakeroot true`.
 
 `alr install`에 **`--url`은 더 이상 필요 없다.** `ubuntu-base-24.04-base-arm64.tar.gz`라는 이름은 존재하지 않고
 (404) `latest` 심링크도 없기 때문에, `alr`이 `cdimage.ubuntu.com`의 `SHA256SUMS`를 읽어 **현재 포인트 릴리스를
