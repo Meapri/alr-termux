@@ -77,7 +77,7 @@ mirror = ""              # 비우면 tarball 기본값 사용 (권장)
 
 > ⚠️ 원래 이 자리에는 "결과를 `state/<distro>/doctor.json`에 캐시하고 런타임이 읽는다" 가 있었다. **구현된 적이 없고**(그 파일을 읽거나 쓰는 코드가 0건), [ADR 0007](adr/0007-android-16-only.md) 로 릴리스별 분기가 사라지면서 필요도 없어졌다.
 
-[01-platform-facts.md §G](01-platform-facts.md)의 P1~P12를 전부 실행한다.
+[01-platform-facts.md §G](01-platform-facts.md)의 **P0~P12**를 전부 실행한다.
 
 ### 3.1 출력 형식
 
@@ -134,7 +134,7 @@ alr doctor — device capability report
 | `FATAL` | 제품이 동작 불가 | P3 exec 거부, P5 file-backed exec 거부, P10 getrandom 차단 |
 | `MITIGATED` | 기능이 켜져서 해결됨 | P6 link → link2symlink, P9 /dev/full → 에뮬 |
 | `EXPECTED` | 정상 | P7 EINVAL |
-| `WARN` | 사용자가 알아야 함 | P11 Go 바이너리, P12 프로세스 예산 |
+| `WARN` | 사용자가 알아야 함 | **P0 미지원 Android 릴리스**, P11 Go 바이너리, P12 프로세스 예산 |
 | `INVALID` | 측정 결과를 신뢰할 수 없음 | P1 permissive 디바이스 |
 
 **`INVALID`면 `alr bench`가 결과에 무효 표시를 붙인다** ([00-product.md §6.6](00-product.md)).

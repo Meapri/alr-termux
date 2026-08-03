@@ -12,14 +12,17 @@
 |---|---|
 | MediaTek MT8775, Android 16 (커널 `6.1.145-android14`) | **검증됨** — 수용 78, 폭 96/96 |
 | Qualcomm Snapdragon 8 Elite SM8750, Android 16 (커널 `6.6.98-android15`) | **검증됨** — 수용 78, 폭 96/96 ([M19](evidence/2026-08-03-m19-snapdragon.md)) |
-| Android 12 / 13 / 14 / 15 (벤더 무관) | **범위 밖 — 지원하지 않는다.** 검증 계획 없음 ([ADR 0007](adr/0007-android-16-only.md)) |
+| Android 12 / 13 / 14 / 15 (모든 기기) | **범위 밖 — 지원하지 않는다.** 검증 계획 없음 ([ADR 0007](adr/0007-android-16-only.md)) |
+| 다른 OEM 의 Android 16 | **미측정.** 두 참조 기기가 모두 Samsung 이다 — 범위 밖이 아니라 **진짜 미해결** |
 
-> ✅ **벤더·커널 축은 닫혔다.** 두 기기는 SoC 벤더가 다르고 커널도 6.1-android14 대 6.6-android15 로 갈리는데, **zygote 차단 syscall 239개 집합이 완전히 동일하다**([§A6](01-platform-facts.md)). 수용 78종, 호환성 폭 96/96, 슈퍼바이저 12/12, `path_traps=0 syscall_stops=0` 도 모두 같다.
+> ✅ **SoC 벤더·커널 축은 닫혔다.** 두 기기는 SoC 벤더가 다르고 커널도 6.1-android14 대 6.6-android15 로 갈리는데, **zygote 차단 syscall 239개 집합이 완전히 동일하다**([§A6](01-platform-facts.md)). 수용 78종, 호환성 폭 96/96, 슈퍼바이저 12/12, `path_traps=0 syscall_stops=0` 도 모두 같다.
+>
+> ⚠️ **OEM 축은 닫히지 않았다 — 두 기기 다 Samsung 이다.** zygote allowlist 는 SoC 벤더가 아니라 **OEM 이 빌드한 플랫폼 이미지 안의 bionic** 에서 온다. 그러므로 이 실측이 닫은 것은 정확히 SoC·커널이고, **다른 OEM 의 Android 16 기기는 진짜 미측정**이다(범위 결정으로 닫힌 항목이 아니다). 다음 기기의 우선순위가 그것이다.
 >
 > 🚫 **Android 릴리스 축은 재지 않기로 했다 — 미해결이 아니라 범위 결정이다**([ADR 0007](adr/0007-android-16-only.md)).
-> 이 설계의 근간인 zygote seccomp allowlist 는 **릴리스마다 커졌다**(android12 365줄 → android16 392줄). 두 기기가 갈린 축(벤더·커널)은 전부 무관했는데 **정작 allowlist 가 실제로 따라가는 축은 고정된 채였다.** 즉 실측 결과는 "OEM 은 상관없다" 의 강한 증거이지 **"Android 12 에서도 될 것" 의 증거가 아니다.** 그리고 그 증거를 만들 계획이 없으므로, 지원한다고 적지 않는다.
+> 이 설계의 근간인 zygote seccomp allowlist 는 **릴리스마다 커졌다**(android12 365줄 → android16 392줄). 두 기기가 갈린 축(SoC 벤더·커널)은 전부 무관했는데 **정작 allowlist 가 실제로 따라가는 축은 고정된 채였다.** 즉 실측 결과는 "SoC 벤더·커널은 상관없다" 의 강한 증거이지 **"Android 12 에서도 될 것" 의 증거가 아니다.** 그리고 그 증거를 만들 계획이 없으므로, 지원한다고 적지 않는다.
 >
-> **지원 선언은 "Android 16, 벤더 무관" 이다.** 범위 밖 기기에서 `alr` 은 거절하지 않지만 `alr doctor` 가 **명시적으로 미지원이라고 말한다** — 그 기기의 스윕 결과를 함께 보여 주므로, 감수하고 쓸지는 사용자가 판단한다. 우리가 검증하지 않았다는 사실이 가려지지는 않는다.
+> **지원 선언은 "Android 16, SoC 벤더 무관 (OEM 은 Samsung 2대만 실측)" 이다.** 범위 밖 기기에서 `alr` 은 거절하지 않지만 `alr doctor` 가 **명시적으로 미지원이라고 말한다** — 그 기기의 스윕 결과를 함께 보여 주므로, 감수하고 쓸지는 사용자가 판단한다. 우리가 검증하지 않았다는 사실이 가려지지는 않는다.
 >
 > **성능 배수는 기기별이다.** 같은 워크로드가 두 기기에서 `node` 콜드 6.60× 와 5.23× 로 갈린다. 배수를 인용할 때는 기기를 함께 쓴다([M19 §6.3](evidence/2026-08-03-m19-snapdragon.md)).
 - **호스트**: Termux **F-Droid / GitHub 빌드** (`targetSdkVersion=28`). Play Store 빌드는 **v1 미지원** (ADR 0005).
@@ -105,6 +108,7 @@
 
 - **GUI / X11 / Wayland / GPU 가속.** 상위 프로젝트(android-on-linux)의 영역. `alr`은 CLI 전용이다.
 - **Play Store Termux 지원** (ADR 0005).
+- **Android 12~15 지원** ([ADR 0007](adr/0007-android-16-only.md)). 검증하지 않는다 — bionic allowlist 는 릴리스마다 커지므로 Android 16 실측을 구버전으로 외삽할 수 없고, 외삽하지 않기로 했다.
 - **보안 격리.** `alr`은 샌드박스가 **아니다**. 경로 재작성은 방어 경계가 아니다.
 - **x86 에뮬레이션** (box64/FEX). 네이티브 arm64만.
 - **systemd / init / 서비스 관리.**

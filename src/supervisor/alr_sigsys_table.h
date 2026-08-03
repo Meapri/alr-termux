@@ -29,6 +29,12 @@
  * produce identical sets, so it ships as a default rather than being
  * regenerated per phone.
  *
+ * One axis is still unvaried and it is NOT the release: both reference
+ * devices are SAMSUNG.  The allowlist comes from the OEM's platform build of
+ * bionic, not from the SoC vendor, so a different OEM on Android 16 remains
+ * genuinely unmeasured -- unlike Android 12-15, which is out of scope by
+ * decision.
+ *
  * On ANY OTHER Android release this table is an unvalidated guess.  The
  * allowlist grows with each release (android12 365 lines -> android16 392),
  * and that axis was deliberately not measured -- it is out of scope, not

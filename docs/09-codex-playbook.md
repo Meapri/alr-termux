@@ -193,7 +193,7 @@ ssh -p 8022 localhost
 > 규칙을 그대로 적용하면 셋으로 갈린다.
 >
 > - **부팅 여부와 execve 정책**은 `targetSdkVersion=28` 인 Termux 라는 조건에서 AOSP 정책이 정하는 것이라 기기를 넘어 유효하다고 볼 근거가 있다.
-> - **차단 syscall 집합은 아니다.** allowlist 는 릴리스마다 자랐고(android12 365줄 → android16 392줄), 이 기기에서 이미 **AOSP 유래 예측이 반증되었다** — `openat2`(437)·`faccessat2`(439) 를 차단으로 예측했는데 실측은 허용이었다([브링업 §P4](evidence/2026-08-02-device-bringup.md)). [§A6](01-platform-facts.md) 가 이 항목을 아직 열어 둔 이유가 그것이다.
+> - **차단 syscall 집합은 아니다.** allowlist 는 릴리스마다 자랐고(android12 365줄 → android16 392줄), 이 기기에서 이미 **AOSP 유래 예측이 반증되었다** — `openat2`(437)·`faccessat2`(439) 를 차단으로 예측했는데 실측은 허용이었다([브링업 §P4](evidence/2026-08-02-device-bringup.md)). §A6 는 이 예측 실패를 기록으로 남긴다. 그 항목 자체는 [ADR 0007](adr/0007-android-16-only.md) 로 닫혔지만, **AOSP 소스로 차단 여부를 추론하지 말 것** 이라는 교훈은 남는다.
 > - **성능 배수**도 아니다 — 이 기기의 값일 뿐이고, ptrace 왕복이 호출당 ≈167 µs 로 [§D1](01-platform-facts.md)의 5~20 µs 모델보다 훨씬 비싼 것이 이 기기/커널 특성일 가능성이 남아 있다([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)).
 >
 > 끝내는 데 필요한 측정은 **둘이었고 둘 다 했다.** 성능 쪽은 두 기기의 배수를 나란히 실었고([M19 §6.3](evidence/2026-08-03-m19-snapdragon.md)), 호환성 쪽은 `alr doctor` 스윕을 다시 돌려 diff 했다 — **diff 는 0이다.** 239개 집합이 완전히 같으므로 `src/supervisor/alr_sigsys_table.h` 는 상수(기본값)로 취급할 수 있다([§A6](01-platform-facts.md)).

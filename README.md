@@ -6,7 +6,8 @@
 
 > **선행 릴리스 (v0.2.0).** 참조 디바이스는 **2대 — MediaTek(커널 6.1)과 Snapdragon 8 Elite(커널 6.6),
 > 둘 다 Android 16**. 두 기기의 zygote 차단 syscall **239개 집합이 완전히 동일하고**, 수용 78·호환성 폭
-> 96/96 도 같다 ([M19](docs/evidence/2026-08-03-m19-snapdragon.md)). **벤더·커널 축은 닫혔다.**
+> 96/96 도 같다 ([M19](docs/evidence/2026-08-03-m19-snapdragon.md)). **SoC 벤더·커널 축은 닫혔다.**
+> (**OEM 축은 아니다** — 두 기기 다 Samsung 이다. allowlist 는 OEM 이 빌드한 플랫폼 이미지에서 오므로 이건 남은 미측정이다.)
 >
 > **Android 16 전용이다.** 12~15 는 **지원 범위 밖**이며 검증하지 않는다 —
 > 미해결 항목이 아니라 결정이다([ADR 0007](docs/adr/0007-android-16-only.md)).

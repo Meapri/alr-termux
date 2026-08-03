@@ -107,7 +107,7 @@ allowlist 부재로 차단되는 것(확인됨): `set_robust_list`(99), `get_rob
 
 > ⚠️ **`openat2`(437)와 `faccessat2`(439)는 추정이 틀렸다** — `MEASURED` 2026-08-02.
 > bionic allowlist 부재를 근거로 차단으로 적었으나, SM-X236N(Android 16)에서 **둘 다 허용**된다. Android 16에서 allowlist가 넓어진 것으로 보인다.
-> **결과**: `openat2(RESOLVE_IN_ROOT)` fast path가 다시 후보가 된다 — 커널이 심링크 탈출을 막아 주므로 [ADR 0003](adr/0003-ld-preload-path-virtualization.md)의 문자열 재작성보다 안전하고 빠르다. 그 ADR이 이것을 기각한 사유(SIGSYS)가 이 기기에서는 성립하지 않는다.
+> **결과**: [ADR 0003](adr/0003-ld-preload-path-virtualization.md) 이 `openat2(RESOLVE_IN_ROOT)` 를 기각한 사유(SIGSYS)는 **지원 대상 기기에서 성립하지 않으므로 폐기됐다.** 다만 **결론은 바뀌지 않았다** — 기각은 유지되고 사유가 교체됐다(아래, [ADR 0007 §3](adr/0007-android-16-only.md)).
 > **채택하지 않기로 최종 결정했다** — [ADR 0007 §3](adr/0007-android-16-only.md). 구버전 재확인 조건은 [ADR 0007](adr/0007-android-16-only.md) 로 사라졌지만, 결론은 그대로 기각이고 근거가 바뀌었다: `openat2` 는 **open 계열만** 덮는데 경로 가상화는 심볼 163개에 걸쳐 있어 재작성기를 대체할 수 없고(경로가 둘로 늘 뿐이다), 재작성 총비용은 이미 예산의 1/20 이라 성능 동기가 없으며, `RESOLVE_IN_ROOT` 의 이점인 심링크 탈출 차단은 [§5 비목표](00-product.md)다.
 
 > ⚠️ **cred-drop 계열 중 `setresuid`(147), `getresuid`(148), `getresgid`(150)는 차단되지 않는다** — `MEASURED`.
@@ -144,7 +144,9 @@ allowlist 부재로 차단되는 것(확인됨): `set_robust_list`(99), `get_rob
 >
 > 🚫 **남은 변수였던 Android 릴리스는 재지 않기로 했다** ([ADR 0007](adr/0007-android-16-only.md)). 아래 문단의 실측·논증은 그대로 유효하며, 그것이 바로 범위를 16으로 좁힌 근거다.
 >
-> **원래 문장:** **남은 변수는 Android 릴리스 하나다.** 두 기기 모두 Android 16이다. 갈린 것(SoC 벤더, 커널 6.1→6.6, android14→android15 공통 브랜치)은 전부 무관했고, **정작 allowlist가 실제로 따라가는 축**(android12 365줄 → android16 392줄)은 고정된 채로 남았다. 즉 이 결과는 "OEM은 상관없다"는 강한 증거이고 "Android 버전도 상관없다"는 증거는 **아니다**.
+> **근거**: 두 기기 모두 Android 16이다. 갈린 것(SoC 벤더, 커널 6.1→6.6, android14→android15 공통 브랜치)은 전부 무관했고, **정작 allowlist가 실제로 따라가는 축**(android12 365줄 → android16 392줄)은 고정된 채로 남았다. 즉 이 결과는 **"SoC 벤더·커널은 상관없다"** 는 강한 증거이고 "Android 버전도 상관없다"는 증거는 **아니다**. 그 증거를 만들지 않기로 했으므로 지원 범위에서 뺀다.
+>
+> ⚠️ **고정된 축이 하나 더 있다 — OEM.** 두 기기 다 **Samsung** 이다(`docs/evidence/sweeps/*.txt` 의 `# device` 줄). allowlist 는 SoC 벤더가 아니라 **OEM 이 빌드한 플랫폼 이미지 안의 bionic** 에서 온다. 그러므로 **다른 OEM 의 Android 16 은 여전히 진짜 미측정**이며, 범위 결정으로 닫힌 항목이 아니다.
 > **무엇이 이것을 끝내는가**: 아무것도 필요 없다 — **결정으로 닫혔다.** 이 항목이 걸고 있던 두 질문(차단 집합 일반화, `openat2`/`faccessat2` 채택)은 각각 [ADR 0007](adr/0007-android-16-only.md) 의 Decision 과 §3 에서 답이 났다.
 > **막고 있던 것**: 구버전 Android 기기였다. 기술적 장애물은 없었고 지금도 없다 — 그래서 이것은 blocker 가 아니라 **선택**이었다. 새 기기(같은 Android 16, 다른 벤더)를 얻으면 여전히 스윕을 돌려 `scripts/diff-sweep.sh` 로 비교한다. `PTRACE_SECCOMP_GET_FILTER` 지름길은 `CAP_SYS_ADMIN` 이 필요해 여전히 불가이므로 스윕이 유일한 길이다.
 >
@@ -513,6 +515,7 @@ naked 함수 + named section + `__start_`/`__stop_` 바운드 심볼 구성은 �
 
 | # | 프로브 | 실패 시 |
 |---|---|---|
+| P0 | `ro.build.version.release == 16` | 미지원 릴리스 → `WARN` 후 **계속 진행**. 거절하지 않는다 ([ADR 0007](adr/0007-android-16-only.md)) |
 | P1 | `getenforce == Enforcing` && `/proc/self/status`의 `Seccomp: 2` | 벤치마크 결과 무효 표시 |
 | P2 | syscall 0..460 스윕 → 디바이스 실제 차단 집합 덤프 | 슈퍼바이저 에뮬 테이블 자동 확장 |
 | P3 | `$PREFIX`의 스크래치 ELF execve | `EACCES` → 치명적, Play 빌드 또는 정책 변경 |

@@ -78,6 +78,7 @@ Accepted (설계 단계, 2026-08-02).
 
 **기각 사유(현행, [ADR 0007 §3](0007-android-16-only.md))**:
 
+- **`RESOLVE_IN_ROOT` 가 이 설계와 충돌한다.** `alr_is_sysdir()` 는 `/proc`·`/sys`·`/dev` 를 **재작성하지 않고 호스트로 통과시킨다**([`alr_path_rule.h:47-52, :152`](../../src/common/alr_path_rule.h)) — `RESOLVE_IN_ROOT` 는 그것들을 rootfs 안에 가두므로 `realpath` 와 `/proc/self/fd/N` 복구가 깨진다. fast path 를 쓰려 해도 sysdir 판정이 먼저 돌아야 하므로 남는 절약은 접두사 `memcpy` 하나다.
 - **덮는 면적이 좁다.** `openat2` 는 `open` 계열만 대체하는데 경로 가상화는 `stat`·`lstat`·`readlink`·`rename`·`opendir`·`exec` 등 **심볼 163개**에 걸쳐 있다. 채택해도 문자열 재작성은 그대로 남으므로 **경로가 하나로 줄지 않고 둘로 는다.**
 - **성능 이득이 측정되지 않는다.** 재작성 총비용은 `git status` 10k 실측 **73.6 µs**, 예산 1.5 ms 의 1/20 이다([M19 §7](../evidence/2026-08-03-m19-snapdragon.md)).
 - **안전성 이득은 비목표다.** `RESOLVE_IN_ROOT` 가 주는 것은 심링크 탈출 차단인데 [00-product.md §5](../00-product.md) 가 `alr` 은 보안 경계가 **아니다**라고 못박는다.
