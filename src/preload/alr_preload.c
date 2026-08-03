@@ -1160,7 +1160,24 @@ char *getcwd(char *buf, size_t sz)
     const char *c;
     if (!r) return r;
     c = alr_guest_canon(r, g_root, g_root_len, g, sizeof g);
-    if (c != r) { size_t n = strlen(c); if (n < sz) memcpy(r, c, n + 1); }
+    if (c != r) {
+        /* Capacity, not the caller's `sz`.  glibc supports getcwd(NULL, 0),
+         * which allocates a buffer sized to the path -- and `sz` is then 0, so
+         * a `n < sz` guard skipped the copy-back entirely and the caller got
+         * the raw HOST path.
+         *
+         * MEASURED: `alr run /bin/pwd` printed <R>/usr/lib while python3's
+         * os.getcwd() and bash's `pwd -P` printed /usr/lib.  coreutils reaches
+         * getcwd through xgetcwd(), which uses exactly the allocating form;
+         * the others pass a real buffer.  It looked like coreutils bypassing
+         * the interposer -- it imports getcwd@GLIBC_2.17 like everyone else.
+         *
+         * Copying in place is safe because guest_canon only ever STRIPS the
+         * root prefix, so the result is never longer than what glibc wrote. */
+        size_t n = strlen(c);
+        size_t cap = sz ? sz : strlen(r) + 1;
+        if (n < cap) memcpy(r, c, n + 1);
+    }
     return r;
 }
 char *get_current_dir_name(void)

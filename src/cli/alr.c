@@ -45,6 +45,8 @@ static const char *g_with;
  * SHELL's, not ours -- reading it lazily from inside sh -c silently invoked
  * /bin/sh with our arguments and reported "Illegal option -d". */
 static char g_self[ALR_PBUF];
+/* Guest view of the cwd we chdir'd to; handed to build_env as $PWD. */
+static char g_guest_cwd[ALR_PBUF];
 
 static void die(const char *reason, const char *detail)
 {
@@ -947,8 +949,79 @@ static int resolve(const struct launch *L, const char *cmd, char *out, size_t n)
     return -1;
 }
 
+/* ── run/shell/exec common options (docs/06-cli-spec.md §1.1) ─────────
+ *
+ * These were specified from the start and never implemented; the parser
+ * accepted only -d/-v/--url.  Two of them are load-bearing elsewhere: -e is
+ * named in docs/02-architecture §6.3 as part of the guest env contract, and -w
+ * is what makes §1.2's cwd mapping controllable.
+ */
+#define ALR_MAX_USER_ENV 32
+
+struct runopts {
+    const char *workdir;                    /* -w: guest path, NULL = auto  */
+    const char *envs[ALR_MAX_USER_ENV];     /* -e KEY=VAL                   */
+    int         nenv;
+    int         fakeroot;                   /* -1 unset, 0/1 forced         */
+    int         no_supervisor;
+};
+
+static void runopts_init(struct runopts *ro)
+{
+    memset(ro, 0, sizeof *ro);
+    ro->fakeroot = -1;
+}
+
+/* Keys alr owns.  A user -e must not silently replace one: the loader
+ * invocation, the resolver bridge and the preload all read these, and a
+ * shadowed ALR_ROOT produces a guest that half-works in ways that look like
+ * our bug.  Refuse loudly instead. */
+static int env_is_reserved(const char *kv)
+{
+    return !strncmp(kv, "ALR_", 4)
+        || !strncmp(kv, "LD_PRELOAD=", 11)
+        || !strncmp(kv, "LD_LIBRARY_PATH=", 16);
+}
+
+/* Parse the common options in place.  Returns the index of the first
+ * non-option argument.  `stop_at_ddash` is for `exec`, where -- ends options
+ * unambiguously (§1: "run과 동일하나 옵션 파싱 모호성 없음"). */
+static int parse_runopts(int argc, char **argv, struct runopts *ro,
+                         const char **distro, int stop_at_ddash)
+{
+    int i = 0;
+    while (i < argc) {
+        const char *a = argv[i];
+        if (stop_at_ddash && !strcmp(a, "--")) return i + 1;
+        if (a[0] != '-' || a[1] == '\0') break;
+        if ((!strcmp(a, "-d") || !strcmp(a, "--distro")) && i + 1 < argc) {
+            *distro = argv[++i]; i++;
+        } else if ((!strcmp(a, "-w") || !strcmp(a, "--workdir")) && i + 1 < argc) {
+            ro->workdir = argv[++i]; i++;
+        } else if ((!strcmp(a, "-e") || !strcmp(a, "--env")) && i + 1 < argc) {
+            const char *kv = argv[++i]; i++;
+            if (!strchr(kv, '='))
+                die("bad-env", "-e needs KEY=VAL");
+            if (env_is_reserved(kv))
+                die("env-reserved",
+                    "-e cannot set an ALR_*/LD_PRELOAD/LD_LIBRARY_PATH key; "
+                    "alr owns those");
+            if (ro->nenv >= ALR_MAX_USER_ENV)
+                die("too-many-env", "too many -e options");
+            ro->envs[ro->nenv++] = kv;
+        } else if (!strcmp(a, "--fakeroot"))      { ro->fakeroot = 1; i++; }
+        else if (!strcmp(a, "--no-fakeroot"))     { ro->fakeroot = 0; i++; }
+        else if (!strcmp(a, "--no-supervisor"))   { ro->no_supervisor = 1; i++; }
+        else if (!strcmp(a, "--log") && i + 1 < argc) { g_log = atoi(argv[++i]); i++; }
+        else if (!strcmp(a, "-v"))                { g_log++; i++; }
+        else die("bad-option", a);
+    }
+    return i;
+}
+
 static char **build_env(const struct launch *L, const char *guest_exe,
-                        const char *guest_argv0)
+                        const char *guest_argv0, const struct runopts *ro,
+                        const char *guest_cwd)
 {
     static char *env[ALR_MAX_ENVP];
     static char bufs[24][ALR_PBUF];
@@ -976,18 +1049,43 @@ static char **build_env(const struct launch *L, const char *guest_exe,
         if (klen ==  4 && !memcmp(environ[i], "PATH", 4)) continue;
         if (klen ==  4 && !memcmp(environ[i], "HOME", 4)) continue;
         if (klen ==  6 && !memcmp(environ[i], "TMPDIR", 6)) continue;
+        /* The host PWD is a Termux path and is stale the moment we chdir into
+         * the rootfs.  It is not cosmetic: POSIX pwd and many shells trust
+         * $PWD when it names the current directory, so leaving the host value
+         * in place makes the guest disagree with itself. */
+        if (klen ==  3 && !memcmp(environ[i], "PWD", 3)) continue;
+        if (klen ==  7 && !memcmp(environ[i], "OLDPWD", 6)) continue;
         if (klen ==  8 && !memcmp(environ[i], "ALR_ROOT", 8)) continue;
         /* The guest rootfs has only C.UTF-8 generated; an inherited
          * LANG=en_US.UTF-8 makes every perl/dpkg invocation emit a locale
          * warning block that buries the real output. */
         if (klen ==  4 && !memcmp(environ[i], "LANG", 4)) continue;
         if (klen >=  3 && !memcmp(environ[i], "LC_", 3)) continue;
+        /* A user -e must WIN over the inherited value.  envp allows duplicate
+         * keys and getenv(3) returns the FIRST match, and this loop runs before
+         * the PUT()s below -- so an inherited key would shadow the -e one.  The
+         * same trap already cost this project a day over PATH (see above). */
+        if (ro) {
+            int u, shadowed = 0;
+            for (u = 0; u < ro->nenv; u++) {
+                const char *uv; size_t ulen = alr_split_env(ro->envs[u], &uv);
+                if (ulen == klen && !memcmp(environ[i], ro->envs[u], klen)) {
+                    shadowed = 1; break;
+                }
+            }
+            if (shadowed) continue;
+        }
         env[n++] = environ[i];
     }
 
 #define PUT(fmt, ...) do { \
         snprintf(bufs[b], ALR_PBUF, fmt, __VA_ARGS__); env[n++] = bufs[b++]; \
     } while (0)
+
+    /* User -e first: these are plain pointers into argv, no buffer needed, and
+     * putting them ahead of everything makes getenv(3) find them first. */
+    if (ro) { int u; for (u = 0; u < ro->nenv && n < ALR_MAX_ENVP - 24; u++)
+                  env[n++] = (char *)ro->envs[u]; }
 
     PUT("ALR_ROOT=%s", L->root);
     /* The preload needs these to re-dispatch the guest's own exec* calls
@@ -1013,6 +1111,16 @@ static char **build_env(const struct launch *L, const char *guest_exe,
      * is exactly why the supervisor exists. */
     PUT("GLIBC_TUNABLES=%s", "glibc.pthread.rseq=0");
     PUT("HOME=%s", "/root");
+    /* The guest view of the working directory (docs/06-cli-spec.md §1.2).
+     *
+     * Needed beyond the chdir because coreutils' pwd does NOT call our
+     * getcwd: gnulib reimplements it by walking ".." with openat/readdir, and
+     * that walk runs on the real tree and reconstructs the HOST path.
+     * MEASURED: `alr run /bin/pwd` printed <R>/usr/lib while python3's
+     * os.getcwd() and bash's `pwd -P` -- both of which do call getcwd --
+     * printed /usr/lib.  POSIX pwd prefers $PWD when it names the current
+     * directory, so setting it correctly is what makes those agree. */
+    if (guest_cwd) PUT("PWD=%s", guest_cwd);
     PUT("TMPDIR=%s", "/tmp");
     PUT("PATH=%s", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
     /* ubuntu-base DOES ship /usr/lib/locale/C.utf8 -- the earlier note that it
@@ -1032,7 +1140,9 @@ static char **build_env(const struct launch *L, const char *guest_exe,
     PUT("LANG=%s", "C.UTF-8");
     PUT("LC_ALL=%s", "C.UTF-8");
     if (L->have_preload) PUT("LD_PRELOAD=%s", L->preload);
-    if (getenv("ALR_FAKEROOT")) PUT("ALR_FAKEROOT=%s", getenv("ALR_FAKEROOT"));
+    /* --fakeroot / --no-fakeroot override the environment (§1.1: "설정값"). */
+    if (ro && ro->fakeroot >= 0)      PUT("ALR_FAKEROOT=%d", ro->fakeroot);
+    else if (getenv("ALR_FAKEROOT"))  PUT("ALR_FAKEROOT=%s", getenv("ALR_FAKEROOT"));
     /* ALR_LOG_FD is honoured from the caller when set, defaulting to 2.
      *
      * It used to be hardcoded to 2 here, and a harness that asked for fd 9 got
@@ -1105,7 +1215,8 @@ static int shebang_resolve(const struct launch *L, char *host, size_t hostsz,
     return shebang_resolve(L, host, hostsz, pre, npre, depth + 1);
 }
 
-static int cmd_run(const char *distro, int argc, char **argv, int login_shell)
+static int cmd_run(const char *distro, int argc, char **argv, int login_shell,
+                   const struct runopts *ro)
 {
     struct launch L;
     char host[ALR_PBUF];
@@ -1127,6 +1238,42 @@ static int cmd_run(const char *distro, int argc, char **argv, int login_shell)
         die("boot-enoent", "command not found in the guest");
     if (shebang_resolve(&L, host, sizeof host, pre, &npre, 0) != 0)
         die("boot-enoent", "script interpreter not found in the guest");
+
+    /* ── cwd mapping (docs/06-cli-spec.md §1.2) ──────────────────────
+     * -w wins; otherwise, if the host cwd is inside <R> the guest keeps the
+     * corresponding directory, and anything else falls back to /root with a
+     * warning.  A chdir here is enough: alr_supervise() forks and the child
+     * execs without changing directory, so it inherits this one, and the
+     * preload's getcwd/realpath report the guest view of it. */
+    {
+        char cwd[ALR_PBUF], target[ALR_PBUF];
+        const char *guest_wd = ro ? ro->workdir : NULL;
+        size_t rl = strlen(L.root);
+
+        if (!guest_wd) {
+            if (getcwd(cwd, sizeof cwd) && !strncmp(cwd, L.root, rl)
+                && (cwd[rl] == '/' || cwd[rl] == '\0')) {
+                guest_wd = cwd[rl] ? cwd + rl : "/";
+            } else {
+                guest_wd = "/root";
+                if (g_log >= 1)
+                    fprintf(stderr, "alr: cwd is outside the guest rootfs; "
+                                    "using /root (docs/06-cli-spec.md §1.2)\n");
+            }
+        }
+        if (guest_wd[0] != '/')
+            die("bad-workdir", "-w takes an absolute GUEST path");
+        snprintf(target, sizeof target, "%s%s", L.root,
+                 !strcmp(guest_wd, "/") ? "" : guest_wd);
+        snprintf(g_guest_cwd, sizeof g_guest_cwd, "%s", guest_wd);
+        if (chdir(target) != 0) {
+            /* Do not fall back silently: a command that runs in an unexpected
+             * directory produces wrong output rather than an error. */
+            char d[ALR_PBUF];
+            snprintf(d, sizeof d, "guest workdir %s does not exist", guest_wd);
+            die("workdir-enoent", d);
+        }
+    }
 
     /* ADR 0002: the program argument MUST contain a '/' -- glibc's dl-load.c
      * treats a slash-free name as a LIBRARY name and searches the library path
@@ -1162,10 +1309,24 @@ static int cmd_run(const char *distro, int argc, char **argv, int login_shell)
     memset(&o, 0, sizeof o);
     o.path = L.ldso;
     o.argv = av;
-    o.envp = build_env(&L, guest_cmd, av[5]);
+    o.envp = build_env(&L, guest_cmd, av[5], ro, g_guest_cwd);
     o.log_level = g_log;
     o.log_fd = -1;
 
+    if (ro && ro->no_supervisor) {
+        /* §1.1 marks this 위험 and says it usually fails to boot -- and it
+         * does: ld.so calls set_robust_list before any constructor runs, the
+         * zygote filter kills it with SIGSYS, and there is no one to emulate
+         * the return.  Kept because a debugger sometimes needs the raw failure,
+         * but it announces itself rather than looking like a normal run. */
+        fprintf(stderr,
+            "alr: WARNING --no-supervisor: nothing will rescue SIGSYS.\n"
+            "  reason=no-supervisor-requested\n"
+            "  Expect death on set_robust_list before main() (ADR 0001).\n");
+        alr_resolvd_stop();
+        execve(o.path, (char *const *)o.argv, (char *const *)o.envp);
+        die("boot-failed", "execve without supervisor failed");
+    }
     if (alr_supervise(&o, &status, &st) < 0) { alr_resolvd_stop(); die("boot-failed", "supervisor failed"); }
     alr_resolvd_stop();
 
@@ -1186,10 +1347,20 @@ static void usage(void)
         "usage: alr [-d distro] [-v] <command>\n"
         "  install [<distro>] [--url <tarball>] [--with git,node,codex]\n"
         "                                     provision a rootfs\n"
-        "  run <cmd> [args...]                run one guest command\n"
-        "  shell                              interactive guest shell\n"
+        "  run [opts] <cmd> [args...]         run one guest command\n"
+        "  exec [opts] -- <cmd> [args...]     run, with -- ending option parsing\n"
+        "  shell [opts]                       interactive guest shell\n"
         "  version                            version and preload identity\n"
-        "  doctor                             device capability report\n");
+        "  doctor [probe-dir]                 device capability report\n"
+        "\n"
+        "options for run/exec/shell (docs/06-cli-spec.md §1.1):\n"
+        "  -d, --distro <name>    rootfs to use\n"
+        "  -w, --workdir <path>   guest cwd (default: mapped host cwd, else /root)\n"
+        "  -e, --env KEY=VAL      add to the guest environment (repeatable)\n"
+        "      --fakeroot         spoof uid 0 (needed by apt/dpkg)\n"
+        "      --no-fakeroot      do not spoof\n"
+        "      --log <0|1|2>      diagnostic verbosity\n"
+        "      --no-supervisor    DANGEROUS: debugging only, usually fails to boot\n");
     exit(2);
 }
 
@@ -1225,12 +1396,21 @@ int main(int argc, char **argv)
         if (!strncmp(d, "--", 2)) d = distro;
         return cmd_install(d, url);
     }
-    if (!strcmp(argv[i], "run")) {
-        if (i + 1 >= argc) usage();
-        return cmd_run(distro, argc - i - 1, argv + i + 1, 0);
+    if (!strcmp(argv[i], "run") || !strcmp(argv[i], "exec")) {
+        /* `exec` is `run` with -- ending option parsing unambiguously (§1). */
+        int is_exec = !strcmp(argv[i], "exec");
+        struct runopts ro; int j;
+        runopts_init(&ro);
+        j = i + 1 + parse_runopts(argc - i - 1, argv + i + 1, &ro, &distro, is_exec);
+        if (j >= argc) usage();
+        return cmd_run(distro, argc - j, argv + j, 0, &ro);
     }
-    if (!strcmp(argv[i], "shell"))
-        return cmd_run(distro, 0, NULL, 1);
+    if (!strcmp(argv[i], "shell")) {
+        struct runopts ro;
+        runopts_init(&ro);
+        (void)parse_runopts(argc - i - 1, argv + i + 1, &ro, &distro, 0);
+        return cmd_run(distro, 0, NULL, 1, &ro);
+    }
     if (!strcmp(argv[i], "version") || !strcmp(argv[i], "--version"))
         return cmd_version();
     if (!strcmp(argv[i], "doctor")) {

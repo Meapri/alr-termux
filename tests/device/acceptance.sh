@@ -97,10 +97,28 @@ rc=$?
 echo
 
 # ── M4: path virtualization ─────────────────────────────────────────────
+echo "── CLI 공통 옵션 (docs/06-cli-spec.md §1.1/§1.2) ──"
+ckc "CLI ENV OPTION"             "FOO=bar"      $ALR run -e FOO=bar /usr/bin/env
+ck  "CLI ENV BEATS INHERITED"    wins           env FOO=inherited $ALR run -e FOO=wins /bin/sh -c 'echo $FOO'
+ck  "CLI WORKDIR OPTION"         /usr/lib       $ALR run -w /usr/lib /bin/pwd
+ck  "CLI WORKDIR SETS PWD"       /usr/lib       $ALR run -w /usr/lib /bin/sh -c 'echo $PWD'
+ck  "CLI EXEC DDASH"             exec-ok        $ALR exec -- /bin/echo exec-ok
+ckrc "CLI ENV RESERVED REFUSED"  125            $ALR run -e ALR_ROOT=/evil /bin/true
+ckrc "CLI BAD OPTION REFUSED"    125            $ALR run --bogus /bin/true
+# cwd mapping falls back to /root when the host cwd is outside the rootfs
+ck  "CLI CWD FALLBACK"           /root          $ALR run /bin/pwd
+
 echo "── M4 경로 가상화 ──"
 ckc "PRELOAD GUEST ETC"          "Ubuntu 24.04" $ALR run /bin/cat /etc/os-release
 ck  "PRELOAD PROC SELF EXE"      /bin/readlink  $ALR run /bin/readlink /proc/self/exe
-ck  "PRELOAD GETCWD CANON"       /usr/bin       $ALR run /bin/bash -c 'cd /usr/bin && pwd'
+# bash's builtin `pwd` answers from its OWN logical $PWD and never calls
+# getcwd, so the original form of this check proved nothing about the
+# interposer.  `pwd -P` does call it.
+ck  "PRELOAD GETCWD CANON"       /usr/bin       $ALR run /bin/bash -c 'cd /usr/bin && pwd -P'
+# The ALLOCATING form, getcwd(NULL, 0), which coreutils reaches through
+# xgetcwd().  It returned the raw HOST path until 2026-08-03: the copy-back
+# was guarded on `n < sz` and sz is 0 for that form.
+ck  "PRELOAD GETCWD ALLOCATING"  /etc           $ALR run /bin/bash -c 'cd /etc && /bin/pwd'
 ck  "PRELOAD REALPATH CANON"     /usr/bin/dash  $ALR run /bin/bash -c 'readlink -f /bin/sh'
 ckc "PRELOAD PATH SEARCH GUEST"  "Ubuntu GLIBC" $ALR run /bin/bash -c 'ldd --version'
 # The escape that the normalize-before-sysdir ordering exists to stop: with the
