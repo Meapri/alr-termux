@@ -151,7 +151,13 @@ n=$(find "$R" -type l -lname '/*' 2>/dev/null \
     | grep -vE '/(proc|sys|dev)/' | wc -l | tr -d ' ')
 [ "${n:-1}" -eq 0 ] && emit "ROOTFS NO ABSOLUTE SYMLINKS" PASS \
                     || emit "ROOTFS NO ABSOLUTE SYMLINKS" FAIL "$n broken link(s)"
-ckc "ROOTFS AWK RESOLVES" "awk" $ALR run /usr/bin/awk --version
+# Run an awk PROGRAM rather than matching its --version banner.  The banner was
+# matched for the substring "awk", which held for 24.04's mawk ("mawk 1.3.4")
+# and broke the moment breadth.sh installed gawk, whose banner is "GNU Awk" with
+# a capital A and no lowercase "awk" anywhere in its output.  The test's subject
+# is that /usr/bin/awk resolves through the guest and executes -- which this
+# checks more strictly, and without caring which awk won the alternatives race.
+ckc "ROOTFS AWK RESOLVES" "awkok" $ALR run /usr/bin/awk 'BEGIN{print "awkok"}'
 # The ldconfig no-op must be registered as a dpkg diversion, not merely written:
 # a libc-bin upgrade restores the real wrapper, that wrapper runs the STATIC
 # ldconfig.real, and its failure leaves libc-bin half-configured -- which makes
