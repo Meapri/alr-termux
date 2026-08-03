@@ -56,18 +56,19 @@ alr version                 # 버전 / preload 경로 / preload sha256 / rootfs 
 ### proot-distro A/B — `git status` 10,000 파일
 
 **양쪽에 같은 git 2.53.0** — proot-distro 가 제공하는 ubuntu 가 26.04 뿐이라 alr 쪽도 26.04 게스트로 맞췄다.
-7회 중앙값, Snapdragon 8 Elite ([M19 §6.1](docs/evidence/2026-08-03-m19-snapdragon.md)):
+워밍업 1회를 버리고 7회 중앙값 `[min-max]`, Snapdragon 8 Elite ([M19 §6.1](docs/evidence/2026-08-03-m19-snapdragon.md)):
 
 | | git | 시간 | |
 |---|---|---|---|
-| native (Termux bionic) | 2.55.0 | 37 ms | — |
-| **alr** (Ubuntu glibc) | **2.53.0** | **39 ms** | 네이티브와 2 ms 차 |
-| proot-distro | **2.53.0** | 947 ms | **24.3× 느림** |
+| native (Termux bionic) | 2.55.0 | 33 ms `[28-40]` | — |
+| **alr** (Ubuntu glibc) | **2.53.0** | **36 ms** `[34-44]` | 네이티브와 3 ms 차 |
+| proot-distro | **2.53.0** | 930 ms `[873-971]` | **25.8× 느림** |
 
 > **이쪽이 아래 M8 수치보다 조건이 깨끗하다.** alr/proot 두 다리가 **같은 배포판·같은 git 버전**이다 —
-> M8 을 약하게 만들었던 "빌드 상이" 를 제거했다. 그러므로 인용할 배수는 **24.3×** 다.
-> **남은 caveat**: native 다리만 여전히 다른 빌드(Termux git 2.55.0)라 "네이티브와 2 ms" 는 근사치다.
-> 1회 세션이고 thermal 이 고정되지 않았다.
+> M8 을 약하게 만들었던 "빌드 상이" 를 제거했다. 그러므로 인용할 배수는 **25.8×** 다.
+> **이 워크로드는 기기 상태에 둔감하다** — 워밍업 없이 잰 37/39/947 과 위 값이 전부 스프레드 안이다.
+> 같은 세션의 exec 처리량이 330↔707 로 갈린 것과 대조된다.
+> **남은 caveat**: native 다리만 여전히 다른 빌드(Termux git 2.55.0)라 "네이티브와 3 ms" 는 근사치다.
 
 <details><summary>참조 기기 #1 (MediaTek) 의 원래 M8 측정 — 세 빌드가 달랐다</summary>
 
@@ -82,7 +83,7 @@ alr version                 # 버전 / preload 경로 / preload sha256 / rootfs 
 기동(`/bin/true`), 9회 중앙값: native 24 ms / **alr 28 ms** / proot-distro 304 ms → **10.9×**.
 
 **34.8× 를 헤드라인으로 쓰지 않았고, 지금도 쓰지 않는다** — 세 실행의 git 빌드가 서로 달랐기 때문이다.
-34.8× → 24.3× 의 하락은 기기 차이와 **git 버전 통일**이 섞여 있어 분리되지 않는다. 더 엄밀한 쪽을 쓴다.
+34.8× → 25.8× 의 하락은 기기 차이와 **git 버전 통일**이 섞여 있어 분리되지 않는다. 더 엄밀한 쪽을 쓴다.
 </details>
 
 ### proot-distro A/B — `npm ci`
