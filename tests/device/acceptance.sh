@@ -267,6 +267,44 @@ $ALR run /bin/bash -c 'printf "#!/bin/sh\necho deep-ok\n" > /tmp/s1 &&
     printf "#!/tmp/s1\n" > /tmp/s2 && chmod +x /tmp/s1 /tmp/s2' >/dev/null 2>&1
 ck  "PRELOAD EXEC SHEBANG RECURSION" deep-ok  $ALR run /tmp/s2
 
+# More docs/07 §2 names that carried PASS with no runner.
+ckc "ALR GIT STATUS 10K" "" $ALR run /usr/bin/git -C /tmp/bigrepo status --porcelain
+# git hooks are a shebang+exec path through the guest, which is exactly what
+# ADR 0002's loader invocation has to get right.
+$ALR run /bin/bash -c 'cd /tmp/gsrc 2>/dev/null || exit 0;
+    printf "#!/bin/sh\necho hook-ran\n" > .git/hooks/pre-commit &&
+    chmod +x .git/hooks/pre-commit' >/dev/null 2>&1
+ckc "ALR GIT HOOKS" "hook-ran" $ALR run /bin/bash -c \
+    'cd /tmp/gsrc && echo y >> a && git add -A && git -c user.email=a@b -c user.name=c commit -m h'
+ckc "ALR GIT CLONE HTTPS" "done" $ALR run /bin/bash -c \
+    'rm -rf /tmp/ghttps && git clone -q --depth 1 https://github.com/git/git /tmp/ghttps 2>&1 | tail -1; echo done'
+# dlopen with an absolute guest path must be rewritten like any other path.
+ckc "PRELOAD DLOPEN ABS PATH" "ok" $ALR run /usr/bin/python3 -c \
+    'import ctypes; ctypes.CDLL("/lib/aarch64-linux-gnu/libm.so.6"); print("ok")'
+# syscall(2) called directly must be rewritten too.  A C probe, not ctypes:
+# CDLL("libc.so.6") dlsym's libc's OWN syscall and never consults the global
+# scope where LD_PRELOAD lives, so the ctypes version measured dlsym semantics
+# and reported a failure the interposer had not made.  See probe_syscall.c.
+if [ -r "$R/usr/include/stdio.h" ]; then
+    cp tests/device/probe_syscall.c "$R/tmp/probe_syscall.c" 2>/dev/null
+    if $ALR run /usr/bin/gcc -O1 -o /tmp/probe_syscall /tmp/probe_syscall.c >/dev/null 2>&1; then
+        ck "PRELOAD SYSCALL REWRITE" syscall-rewrite-ok $ALR run /tmp/probe_syscall
+    else
+        emit "PRELOAD SYSCALL REWRITE" SKIP "probe did not compile"
+    fi
+else
+    emit "PRELOAD SYSCALL REWRITE" SKIP "no libc6-dev in the guest"
+fi
+# envp re-injection must be idempotent: a guest that execs again must not
+# accumulate LD_PRELOAD entries.
+ckc "PRELOAD EXEC ENVP IDEMPOTENT" "1" $ALR run /bin/bash -c \
+    '/bin/bash -c "/bin/bash -c \"echo \$LD_PRELOAD\"" | tr : \\n | grep -c libalr_preload'
+# The supervisor forwards signals it did not originate (§4.3).
+ckc "SUPERVISOR SIGNAL FORWARD" "got-term" $ALR run /bin/bash -c \
+    'trap "echo got-term" TERM; (sleep 0.2; kill -TERM $$) & sleep 0.5'
+# bash reading a script from stdin is the shape an interactive session uses.
+ck  "ALR BASH INTERACTIVE" bash-stdin $ALR run /bin/bash -s <<< 'echo bash-stdin'
+
 echo "── M4 경로 가상화 ──"
 ckc "PRELOAD GUEST ETC"          "Ubuntu 24.04" $ALR run /bin/cat /etc/os-release
 ck  "PRELOAD PROC SELF EXE"      /bin/readlink  $ALR run /bin/readlink /proc/self/exe
