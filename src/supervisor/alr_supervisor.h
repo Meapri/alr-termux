@@ -29,6 +29,13 @@ struct alr_sup_stats {
      * PTRACE_SYSCALL and the entire performance claim is void. */
     unsigned long syscall_stops;
     unsigned long path_traps;
+    /* docs/03-supervisor-spec.md §6 names both of these in the stats line and
+     * neither existed.  passthrough_signals is the §4.3 rule made visible: a
+     * signal we did NOT originate is delivered unchanged.  elapsed_ms is the
+     * supervised wall time -- the denominator for every other counter here,
+     * and without it "sigsys=22" has no scale. */
+    unsigned long passthrough_signals;
+    unsigned long elapsed_ms;
 };
 
 struct alr_sup_opts {

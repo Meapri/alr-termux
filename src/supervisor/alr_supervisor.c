@@ -15,6 +15,7 @@
 #include <sys/ptrace.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifndef __WALL
@@ -307,6 +308,11 @@ int alr_supervise(const struct alr_sup_opts *o, int *status_out,
     struct sup s;
     pid_t leader;
     int st0, leader_status = 0;
+    struct timespec t_start;
+    /* CLOCK_MONOTONIC, not wall time: a clock step mid-run would otherwise
+     * produce a negative or absurd duration, and this number's job is to be
+     * the denominator for the counters beside it. */
+    clock_gettime(CLOCK_MONOTONIC, &t_start);
     long opts = PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK | PTRACE_O_TRACECLONE
               | PTRACE_O_TRACEEXEC | PTRACE_O_TRACEEXIT | PTRACE_O_EXITKILL;
 
@@ -452,9 +458,20 @@ int alr_supervise(const struct alr_sup_opts *o, int *status_out,
             continue;
         }
 
+        /* §4.3: anything we did not originate goes through untouched.  Counted
+         * so the rule is visible rather than asserted -- a regression that
+         * started swallowing signals would otherwise look like nothing. */
+        if (st) st->passthrough_signals++;
         ptrace(PTRACE_CONT, t, 0, sig);   /* pass through unchanged */
     }
 
+    if (st) {
+        struct timespec t_end;
+        clock_gettime(CLOCK_MONOTONIC, &t_end);
+        st->elapsed_ms = (unsigned long)
+            ((t_end.tv_sec - t_start.tv_sec) * 1000
+             + (t_end.tv_nsec - t_start.tv_nsec) / 1000000);
+    }
     if (status_out) *status_out = leader_status;
     return 0;
 }

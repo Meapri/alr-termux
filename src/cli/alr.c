@@ -1732,10 +1732,16 @@ static int cmd_run(const char *distro, int argc, char **argv, int login_shell,
     alr_resolvd_stop();
 
     if (g_log >= 1)
+        /* The full line docs/03-supervisor-spec.md §6 specifies.  It was
+         * missing passthrough_signals and elapsed_ms, and bench/
+         * regression_gate.py's patterns are anchored per-key, so adding
+         * fields does not disturb them. */
         fprintf(stderr, "alr supervisor: pids=%lu sigsys=%lu emulated=%lu "
-                        "path_traps=%lu syscall_stops=%lu\n",
+                        "passthrough_signals=%lu path_traps=%lu "
+                        "syscall_stops=%lu elapsed_ms=%lu\n",
                 st.tracees_seen, st.sigsys_seen, st.sigsys_emulated,
-                st.path_traps, st.syscall_stops);
+                st.passthrough_signals, st.path_traps, st.syscall_stops,
+                st.elapsed_ms);
 
     return alr_exit_code(status);
 }

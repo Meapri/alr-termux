@@ -229,6 +229,12 @@ alr supervisor: pids=<n> sigsys=<n> emulated=<n> passthrough_signals=<n>
 
 **`path_traps=0`과 `syscall_stops=0`은 불변식이다.** 0이 아니면 누군가 `PTRACE_SYSCALL`을 도입한 것이고, regression gate가 실패해야 한다 ([07-acceptance.md](07-acceptance.md)).
 
+> ⚠️ **2026-08-03 까지 이 줄의 네 필드가 실제와 달랐다.**
+> - `passthrough_signals` 와 `elapsed_ms` 는 **구조체에 없었다** — 스펙만 있고 출력되지 않았다. 지금은 둘 다 있다.
+> - `path_traps` 와 `syscall_stops` 는 있었지만 **증가시키는 코드가 없었다.** 구조적으로 0이었고, 게이트가 그것을 측정값으로 읽었다. 즉 `PTRACE_SYSCALL` 을 잡으려고 존재하는 불변식이 그것을 볼 수 없었다.
+>
+> 지금은 넷 다 실측이며, 발화도 확인했다 — 통과 지점의 `PTRACE_CONT` 를 `PTRACE_SYSCALL` 로 바꾸면 `syscall_stops=190 path_traps=16` 이 나오고 슈퍼바이저 자체시험이 12/0 에서 7/5 가 된다. 소스 수준 가드는 [`scripts/check-invariants.sh`](../scripts/check-invariants.sh).
+
 `ALR_LOG=2`에서는 SIGSYS 발생마다 한 줄:
 ```
 alr sigsys: tid=<t> nr=<n> name=<name> ret=<r> pc=<hex>

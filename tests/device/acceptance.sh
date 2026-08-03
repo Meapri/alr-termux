@@ -151,6 +151,22 @@ else
 fi
 ckrc "CLI UPDATE COMPONENTS"     0  $ALR update-components
 ckc  "CLI LIST"                  "$(basename "$R")"  $ALR list
+# docs/03-supervisor-spec.md §6 names these two and neither existed in the
+# struct.  Both are asserted to be PRESENT and, for passthrough, to actually
+# move -- a counter nobody has seen change is the same defect one step along.
+ckc  "SUPERVISOR STATS ELAPSED"  "elapsed_ms=" \
+     env ALR_LOG=1 $ALR run /bin/true
+_ps=$(env ALR_LOG=1 $ALR run /bin/bash -c 'kill -WINCH $$; kill -USR1 $$ 2>/dev/null; echo ok' 2>&1 \
+      | grep -oE 'passthrough_signals=[0-9]+' | tail -1 | cut -d= -f2)
+[ "${_ps:-0}" -ge 1 ] && emit "SUPERVISOR SIGNAL PASSTHROUGH" PASS "$_ps forwarded" \
+                      || emit "SUPERVISOR SIGNAL PASSTHROUGH" FAIL "counter stayed at ${_ps:-unset}"
+# elapsed_ms must track real time, not be a constant: a 0.4 s sleep has to
+# report more than a trivial command.
+_e1=$(env ALR_LOG=1 $ALR run /bin/true 2>&1 | grep -oE 'elapsed_ms=[0-9]+' | cut -d= -f2)
+_e2=$(env ALR_LOG=1 $ALR run /bin/bash -c 'sleep 0.4' 2>&1 | grep -oE 'elapsed_ms=[0-9]+' | cut -d= -f2)
+[ "${_e2:-0}" -gt "${_e1:-0}" ] && [ "${_e2:-0}" -ge 300 ] \
+    && emit "SUPERVISOR ELAPSED TRACKS TIME" PASS "true=${_e1}ms sleep0.4=${_e2}ms" \
+    || emit "SUPERVISOR ELAPSED TRACKS TIME" FAIL "true=${_e1} sleep0.4=${_e2}"
 # A distro name becomes a path component AND is interpolated into a shell
 # command, and `remove` deletes what it resolves to.  Nothing validated it.
 ckrc "CLI REJECTS DOTDOT DISTRO" 125  $ALR -d ../escape run /bin/true
