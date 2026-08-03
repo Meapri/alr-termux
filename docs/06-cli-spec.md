@@ -14,7 +14,7 @@ alr run [옵션] <command> [args...]     단일 명령 실행
 alr shell [옵션]                       게스트 로그인 셸 (기본 bash -l)
 alr exec [옵션] -- <command> [args...] run과 동일하나 옵션 파싱 모호성 없음
 
-alr doctor [--json] [--full]           디바이스 능력 진단
+alr doctor [probe-dir]                 디바이스 능력 진단 (플래그 없음 — 아래 ⚠️)
 alr bench [--vs proot] [--json]        벤치마크
 alr version
 alr config get|set <key> [<value>]
@@ -77,7 +77,11 @@ mirror = ""              # 비우면 tarball 기본값 사용 (권장)
 
 > ⚠️ 원래 이 자리에는 "결과를 `state/<distro>/doctor.json`에 캐시하고 런타임이 읽는다" 가 있었다. **구현된 적이 없고**(그 파일을 읽거나 쓰는 코드가 0건), [ADR 0007](adr/0007-android-16-only.md) 로 릴리스별 분기가 사라지면서 필요도 없어졌다.
 
-[01-platform-facts.md §G](01-platform-facts.md)의 **P0~P12**를 전부 실행한다.
+[01-platform-facts.md §G](01-platform-facts.md)의 **P0~P10** 을 실행한다(P2a 포함).
+
+> ⚠️ **구현과 스펙이 다른 부분 — 실측 2026-08-03.** `alr doctor` 는 **플래그를 받지 않는다.** 이 문서가 적어 둔 `--json`·`--full` 은 구현된 적이 없고, `argv[1]` 은 **프로브 디렉토리**로 해석된다. 그래서 문서대로 `alr doctor --json` 을 치면 멀쩡한 기기에서 `probe dir --json` 으로 프로브가 실패해 **`VERDICT: NOT READY` 와 "design dead"** 라는 가짜 진단이 나왔다. 지금은 알 수 없는 옵션을 `reason=doctor-unknown-option` 으로 거절한다(exit 2). **`--json` 출력은 여전히 없다.**
+>
+> **P11·P12 도 구현되어 있지 않다** — [§G](01-platform-facts.md) 표에 그렇게 표시해 두었다.
 
 ### 3.1 출력 형식
 
@@ -158,7 +162,7 @@ alr doctor — device capability report
 - **stdout은 게스트 것이다.** alr의 진단은 전부 stderr 또는 `ALR_LOG_FD`로.
 - 종료 코드는 게스트의 것을 그대로 전파 (`WIFSIGNALED` → `128 + sig`).
 - alr 자신의 실패는 `125`를 쓴다 (`env`/`nice`의 관례와 일치, 게스트 코드와 충돌 최소화).
-- `--json`이 있으면 stdout에 JSON 한 덩어리, 사람용 출력 없음.
+- ~~`--json`이 있으면 stdout에 JSON 한 덩어리, 사람용 출력 없음.~~ **미구현** — 어느 서브커맨드에도 `--json` 이 없다.
 
 ## 6. 시그널 처리
 

@@ -533,8 +533,16 @@ static void probe_devices(void)
     /* P9: /dev/full is expected to be denied (no SELinux type in AOSP). */
     fd = open("/dev/full", O_WRONLY);
     if (fd < 0) {
-        counts[G_MITIGATED]++;
-        printf("  [P9 ] /dev/full -> %s -> MITIGATED (emulation required)\n",
+        /* NOT MITIGATED.  06-cli-spec §3.2 defines MITIGATED as "기능이 켜져서
+         * 해결됨" -- a feature is on and the problem is handled.  /dev/full
+         * emulation was never implemented and is a documented permanent
+         * non-goal (docs/00-product.md §5, RISKS §4): serving it means
+         * interposing write(), the hottest syscall in the process, and the
+         * failure surface is open-ended enough that one missed symbol passes
+         * silently as a successful write.  Reporting MITIGATED here was the
+         * code itself claiming a mitigation that does not exist. */
+        counts[G_EXPECTED]++;
+        printf("  [P9 ] /dev/full -> %s -> EXPECTED (non-goal, not emulated)\n",
                strerror(errno));
     } else {
         counts[G_PASS]++;
@@ -583,6 +591,35 @@ int main(int argc, char **argv)
     struct utsname u;
     int measurable;
 
+    /* argv[1] is the probe DIRECTORY, and it used to be taken unconditionally.
+     * docs/06-cli-spec.md documents `alr doctor [--json] [--full]`, neither of
+     * which exists, so following the documentation gave "--json" to mkdir-ish
+     * probes and produced a confident FALSE FATAL on a healthy phone:
+     *
+     *   [P3 ] cannot create --json/.alr-exec-probe: No such file... -> FATAL
+     *   [P5 ] file-backed PROT_EXEC mmap -> FATAL (ld.so cannot map guest
+     *         libraries -- design dead)
+     *   VERDICT: NOT READY (fatal probes failed)
+     *
+     * "design dead" is the most alarming thing this tool can say, and it said
+     * it because of an unimplemented flag.  Refuse unknown options instead:
+     * an honest "I do not have that flag" beats a diagnosis that is wrong. */
+    if (argc > 1 && argv[1][0] == '-') {
+        if (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")) {
+            printf("usage: alr-doctor [probe-dir]\n"
+                   "  probe-dir  where to create scratch files (default $TMPDIR)\n"
+                   "\nNo other options exist.  Output is a human-readable report;\n"
+                   "there is no --json.\n");
+            return 0;
+        }
+        fprintf(stderr,
+                "alr-doctor: unknown option '%s'\n"
+                "  reason=doctor-unknown-option\n"
+                "  This tool takes an optional probe DIRECTORY and no flags.\n"
+                "  (docs may mention --json/--full; they are not implemented.)\n",
+                argv[1]);
+        return 2;
+    }
     if (argc > 1) dir = argv[1];
     if (!dir) dir = ".";
 

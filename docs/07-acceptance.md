@@ -279,13 +279,23 @@ ALR MEDIATION INVARIANT:          PASS   path_traps=0 syscall_stops=0  MEASURED
 
 **하드 불변식 — 어기면 즉시 실패:**
 ```
-supervisor.syscall_stops == 0
-supervisor.path_traps    == 0
-preload.rw_abs_ns        <= 100
-preload.rw_rel_ns        <= 20
-preload.malloc_calls     == 0
-preload.glibc_verneed_max <= "2.17"
+supervisor.syscall_stops  == 0
+supervisor.path_traps     == 0
+preload.rw_total_us       <= 1500      # git status 10k 재작성 총비용
+preload.glibc_verneed_max == "2.17"
+preload.malloc_calls      == 0         # UNENFORCED — 아래
 ```
+
+**per-op 는 기기별 회귀 검사 + 절대 천장으로 옮겼다** ([M19 §7](evidence/2026-08-03-m19-snapdragon.md)):
+
+```
+preload.rw_{abs,rel,sysdir,under}_ns  <= 그 기기 기준선 × 2.5   (하드)
+preload.rw_{abs,rel,sysdir,under}_ns  <= 500/40/150/500 ns      (절대 천장, 건너뛸 수 없음)
+```
+
+> ⚠️ **`rw_abs_ns <= 100` 은 더 이상 하드 불변식이 아니다.** 기기 간 이식되지 않기 때문이다 — 동일한 코드가 참조 #1 에서 58.9 ns, 참조 #2 에서 93~129 ns 다. 100 ns 선은 지원 기기 한쪽에서 통과하고 한쪽에서 실패한다. 목표를 옮긴 것이 아니라, **§13 이 원래 적어 둔 총비용 예산으로 게이트를 옮기고** per-op 는 더 촘촘한 기기별 검사로 대체한 것이다.
+>
+> `preload.malloc_calls` 는 **아무것도 측정하지 않는다.** 게이트가 매 실행 `UNENFORCED` 로 출력해 이 공백이 각주가 아니라 게이트 자신의 출력에 보이게 한다.
 
 `syscall_stops != 0`은 누군가 `PTRACE_SYSCALL`을 도입했다는 뜻이고, **그 순간 이 제품은 PRoot다.** 성능 주장 전체가 무효화되므로 가장 중요한 게이트다.
 

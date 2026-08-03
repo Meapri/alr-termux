@@ -528,5 +528,7 @@ naked 함수 + named section + `__start_`/`__stop_` 바운드 심볼 구성은 �
 | P8 | `posix_openpt`/`grantpt`/`unlockpt` | 실패 → PTY 에뮬레이션 필요 (예상 밖) |
 | P9 | `open("/dev/full")` | `EACCES` 기대 → 에뮬레이션 활성화 |
 | P10 | `getrandom`, `memfd_create` 가용성 | 차단 → **크게 실패**, 폴백 없음 |
-| P11 | `svc #0` 스캔: rootfs 바이너리 중 libc/ld.so 밖에서 raw syscall 발행하는 것 | 경고 목록 출력 (Go 바이너리 탐지) |
-| P12 | 살아 있는 자손 프로세스 수 vs phantom 한도 32 | ~24 초과 시 경고 |
+| ~~P11~~ | `svc #0` 스캔: raw syscall 발행 바이너리 탐지 | **미구현.** 설계만 있고 `doctor.c` 에 없다 |
+| ~~P12~~ | 살아 있는 자손 수 vs phantom 한도 32 | **미구현.** 설계만 있고 `doctor.c` 에 없다 |
+
+> ⚠️ P11·P12 는 이 표에 오래 있었지만 **한 번도 구현되지 않았다**(실측 2026-08-03). 다른 문서가 "P1~P12 를 전부 실행한다" 고 적고 예시 출력까지 보여 주고 있었다. 구현하거나 내리거나 둘 중 하나여야 하며, 그때까지 여기 취소선으로 남긴다.
