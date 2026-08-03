@@ -49,7 +49,7 @@ TERMUX_PKG_SRCURL=https://github.com/Meapri/alr-termux/archive/refs/tags/v${TERM
 # automated cross-check: their URLs interpolate TERMUX_PKG_VERSION, so a
 # version bump silently repoints them while the old hashes stay.  Bump them in
 # the same commit, or set them back to PLACEHOLDER so the guard below fires.
-TERMUX_PKG_SHA256=PLACEHOLDER_v0.3.0_source_archive_sha256
+TERMUX_PKG_SHA256=e54ae567f0c261362e6e4fdda8d4ec7e5222b39f5f39b9cf052bb8ee1770a174
 
 # Runtime dependencies, derived from what src/cli/alr.c actually execs or pipes
 # through popen() ON THE HOST.  These are not guesses:
@@ -92,11 +92,9 @@ TERMUX_PKG_NO_ELF_CLEANER=true
 # host binaries so the API level and hardening flags match the rest of the
 # repository rather than whatever the release machine happened to have.
 _PRELOAD_TARBALL_URL="https://github.com/Meapri/alr-termux/releases/download/v${TERMUX_PKG_VERSION}/alr-${TERMUX_PKG_VERSION}-aarch64.tar.gz"
-# PLACEHOLDER until the v0.3.0 release exists -- this is by definition the
-# sha256 of a tarball that has not been published yet.  Copy it from the
-# SHA256SUMS the release job emits, and verify by re-hashing the download
-# rather than trusting the paste.
-_PRELOAD_TARBALL_SHA256="PLACEHOLDER_v0.3.0_release_tarball_sha256"
+# From the SHA256SUMS the v0.3.0 release job published, verified by
+# downloading the tarball and re-hashing it rather than trusting the paste.
+_PRELOAD_TARBALL_SHA256="767c6111fcc0058a7ee43f9837ad4cbfb4a7ed9aced3332ca8cc6373a5222e00"
 
 # Fail at the top rather than 200 lines into a build with a confusing 404.
 _alr_refuse_placeholders() {
