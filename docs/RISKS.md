@@ -280,11 +280,21 @@ msgget : Function not implemented
 
 **이 기기에서는 실패한다.** `alr doctor` P6이 같은 디렉토리 `link(2)`에 **`EACCES`**를 보고했다 ([device-bringup](evidence/2026-08-02-device-bringup.md)). rootfs를 앱 사설 저장소에 풀 때 tar가 하드링크 항목에서 실패하는 것과 정확히 일치한다 ([M3](evidence/2026-08-02-m3-first-boot.md)) — 그 경고를 흘려보내면 `perl5.38.2`와 `uncompress`가 없는 **조용히 깨진 rootfs**가 된다. 따라서 link2symlink 계층은 이 기기에서 **켜져 있고, 끌 수 없다.**
 
-**그럼에도 마커를 유지하는 이유**: 이건 정책 문서가 아니라 **한 기기의 파일시스템 실측**이다. 근거는 Android 10~16 정책 검토, Android 11/12 직접 관찰, 그리고 이 MediaTek MT8775 1대뿐이다. OEM 커널과 스토리지 스택 차이(f2fs vs ext4, sdcardfs 잔재)에서 달라질 여지가 남는다. 이 항목은 `PASS`도 `FAIL`도 아니라 **"이 기기에서는 FAIL, 모집단에 대해서는 미지"**다.
+**두 번째 기기에서도 실패한다** — `MEASURED` 2026-08-03 ([M19](evidence/2026-08-03-m19-snapdragon.md)). Snapdragon 8 Elite / 커널 6.6.98 에서 `alr doctor` P6 이 **같은 `EACCES`** 를 낸다:
 
-**무엇이 이것을 끝내는가**: 두 번째 기기(다른 벤더 SoC, 가급적 Android 12~15)에서 `alr doctor` P6을 돌린다. **성공하면 그 기기에서 link2symlink 전체를 끈다** — 불필요한 복잡도이자 버그 표면이고, 런타임 스위치는 이미 있다(`state/<name>/doctor.json`의 `link2symlink`, [04-preload-spec.md §8](04-preload-spec.md)).
+```
+[P6 ] link(2) same-dir -> Permission denied (EACCES as documented)   -> MITIGATED
+```
 
-**오늘 무엇이 막는가**: 참조 기기가 1대뿐이다. **코드가 아니라 기기 수가 막고 있다.**
+설치 로그도 같은 말을 한다 — `hardlink members: 0 linked, 2 copied, 0 failed`(24.04), `0 linked, 115 copied`(26.04). 링크가 되는 항목이 **한 건도 없다.**
+
+**결과**: 벤더·커널·스토리지 스택이 갈려도 결과가 같으므로, link2symlink 계층은 **끄지 않는다.** 런타임 스위치(`state/<name>/doctor.json` 의 `link2symlink`, [04-preload-spec.md §8](04-preload-spec.md))는 남겨 두되 기본값은 켜짐이다.
+
+**그럼에도 마커를 완전히 지우지는 않는다**: 두 기기 모두 **Android 16** 이다. 이 제약은 앱 사설 저장소에 대한 SELinux/커널 정책에서 오고, 정책은 릴리스마다 바뀐다. 근거는 이제 Android 10~16 정책 검토 + Android 11/12 직접 관찰 + Android 16 기기 2대다. **"Android 16 에서는 벤더 무관하게 FAIL, 구버전 릴리스에 대해서는 미지"** 가 정확한 상태다.
+
+**무엇이 이것을 끝내는가**: Android 12~15 기기에서 `alr doctor` P6. 성공하면 그 릴리스에서 link2symlink 를 끈다 — 불필요한 복잡도이자 버그 표면이다.
+
+**오늘 무엇이 막는가**: 구버전 Android 기기가 없다. **코드가 아니라 기기가 막고 있다.**
 
 ### R11. phantom process 32개 한도 — `SOURCE`, 완화만 가능
 

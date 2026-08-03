@@ -83,7 +83,44 @@ kernel   : 6.1.145-android14
 
 **4. 26.04 는 v1 대상이 아니다.** 설치는 되고 coreutils 를 제외한 나머지는 동작하며, `alr install` 이 그 사실을 경고한다.
 
+## 추가 실측 — uutils 가 죽는 지점은 생각보다 앞이다 (2026-08-03, 참조 기기 #2)
+
+`svc` 74개는 "경로 가상화가 닿지 않는다"는 이야기였다. 실제로 26.04 게스트에서 `ls` 를 돌리면 경로 문제까지 가지도 못하고 **디스패치에서 죽는다**:
+
+```
+$ alr -d ubuntu-26.04 run /bin/ls /
+coreutils: unknown program 'ld-linux-aarch64.so'
+```
+
+uutils coreutils 는 멀티콜 바이너리라 자기 이름으로 어떤 applet 인지 정한다. 그 이름을 **`argv[0]` 에서 얻지 않는다.** `alr` 이 `--argv0` 을 제대로 넘기는 것은 확인했다:
+
+```
+argv[4]=--argv0
+argv[5]=/bin/ls          <- 정확하다
+argv[8]=<root>/bin/ls
+```
+
+그런데도 `ld-linux-aarch64.so` 라고 말한다 — `ld-linux-aarch64.so.1` 에서 확장자를 뗀 모양이다. 즉 applet 이름의 출처는 argv[0] 이 아니라 **실행 파일 자신의 정체**(`/proc/self/exe` 계열)이고, [ADR 0002](0002-explicit-loader-invocation.md) 의 명시적 로더 호출은 그것을 필연적으로 **로더**로 만든다. preload 가 `/proc/self/exe` 를 합성해 두지만 uutils 는 raw `svc` 라 그 합성이 닿지 않는다.
+
+대조군으로 같은 게스트의 `git`(평범한 동적 glibc 바이너리)은 정상이다 — `git --exec-path` 가 `/usr/lib/git-core` 를 올바로 답한다. 그리고 **`git status` 는 26.04 게스트에서 완전히 동작한다**([M19 §6](../evidence/2026-08-03-m19-snapdragon.md)). 깨지는 것은 coreutils 이지 26.04 전체가 아니다.
+
+### 떠오르는 완화책 하나 — 그리고 그것을 검증하지 못한 이유
+
+정체가 이름에서 온다면, **로더를 applet 이름의 심링크로 exec** 하면(`<farm>/ls` → `ld.so`) `/proc/self/exe` 의 basename 이 `ls` 가 되어 디스패치가 맞을 수 있다. 설치 때 심링크 팜을 만들고 `exec_build()` 가 로더 경로만 바꾸면 되는, 작은 변경이다.
+
+**검증하지 못했다.** 이 실험은 `alr` 바깥에서 로더를 직접 띄워야 하는데, 그러면 슈퍼바이저가 없어 차단 syscall 에서 즉사한다:
+
+```
+$ <root>/lib/ld-linux-aarch64.so.1 --argv0 /bin/ls ... <root>/bin/ls /
+Unknown signal 31        # SIGSYS — ADR 0001 이 말하는 그것
+```
+
+로더 이름을 바꾼 쪽도 **똑같이** SIGSYS 로 죽는다. 즉 A/B 가 성립하지 않는다. 이 가설을 재려면 `alr` 에 별칭 exec 경로를 먼저 넣어야 하고, 그것은 검증이 아니라 기능 추가다.
+
+**그러므로 지금 확정된 것은 부정형뿐이다**: 원인은 `argv[0]` 이 아니다. 심링크 팜은 *유망한 미검증 가설*이며, 위 3번(선택적 USER_NOTIF)보다 훨씬 싸므로 26.04 를 다시 볼 때 **먼저** 시험할 후보다. 다만 이것이 통해도 고쳐지는 것은 **디스패치**뿐이고, `svc` 74개가 만드는 경로 가상화 부재는 그대로 남는다 — 즉 `ls /etc` 는 게스트가 아니라 Android 의 `/etc` 를 보게 된다. 완전한 해법이 아니다.
+
 ## 다시 볼 조건
 
 - **arm64 SUD 를 지원하는 커널이 흔해지면** 이 결정을 뒤집어야 한다. SUD 는 프로세스 안에서 처리되므로 알림 왕복이 없고, raw-syscall 바이너리를 native 에 가까운 비용으로 지원할 수 있는 유일한 알려진 길이다.
-- Ubuntu 가 26.04 이후로도 uutils 를 유지하고 사용자가 최신 LTS 를 요구하면, 위 3번(선택적 적용)이 "느리지만 동작" 과 "아예 안 됨" 중 하나를 고르는 문제가 된다.
+  - **커널 6.6 에서도 아직 없다** — 참조 기기 #2(Snapdragon 8 Elite, `6.6.98-android15`)에서 `PR_SET_SYSCALL_USER_DISPATCH` 는 인자 두 형태 모두 `EINVAL` 이다([M19 §2](../evidence/2026-08-03-m19-snapdragon.md)). 이 ADR 의 근거는 6.1 과 6.6 양쪽에서 성립한다.
+- Ubuntu 가 26.04 이후로도 uutils 를 유지하고 사용자가 최신 LTS 를 요구하면, 위 3번(선택적 적용)이 "느리지만 동작" 과 "아예 안 됨" 중 하나를 고르는 문제가 된다. 그 전에 심링크 팜 가설부터 시험한다.

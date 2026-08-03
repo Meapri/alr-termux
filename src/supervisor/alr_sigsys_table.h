@@ -8,6 +8,35 @@
  *   date     2026-08-02
  *   result   239 of 468 syscalls blocked (SIGSYS / SYS_SECCOMP)
  *
+ * CONFIRMED ON A SECOND DEVICE, 2026-08-03 (docs/evidence/2026-08-03-m19-*):
+ *   device   Samsung SM-S937N  (Snapdragon 8 Elite SM8750 / "sun")
+ *   kernel   6.6.98-android15-8 aarch64      <- different vendor AND major.minor
+ *   context  uid=10447  u:r:untrusted_app_27:s0  Seccomp=2
+ *   result   239 of 468 blocked -- and the SETS ARE IDENTICAL.  Not merely the
+ *            same count: a full 239-vs-239 diff of the two sweeps comes back
+ *            with zero on either side.
+ *              scripts/diff-sweep.sh docs/evidence/sweeps/mediatek-*.txt \
+ *                                    docs/evidence/sweeps/snapdragon-*.txt
+ *
+ * The negative claims below hold there too: 147/148/150 are not blocked on
+ * either device.  That is the load-bearing detail -- a coarse range filter
+ * would have swept those up with their neighbours 143-152, so their survival
+ * on both devices is a fingerprint match rather than a coincidence of totals.
+ *
+ * That is TWO devices, not a proof of universality, and BOTH ARE ANDROID 16.
+ * Kernel and SoC vendor differ (6.1-android14/MediaTek vs 6.6-android15/
+ * Qualcomm) and made no difference; the Android RELEASE is the variable that
+ * has not been varied, and it is the one the allowlist actually tracks
+ * (android12 365 lines -> android16 392).  What this buys is that the table
+ * may ship as a DEFAULT rather than being regenerated per phone.  `alr doctor`
+ * still regenerates it, and docs/01-platform-facts.md §A6 keeps the caveat.
+ *
+ * Raw sweeps are checked in verbatim under docs/evidence/sweeps/ so the next
+ * comparison is a one-liner.  Before that they lived only in the `#if 0` block
+ * at the end of this file, which is easy to miss -- the diff above was nearly
+ * abandoned as impossible because a grep for the table rows found only the
+ * ~30 exceptions and the full set looked lost.
+ *
  * Regenerate with:  alr doctor            (see docs/06-cli-spec.md §3)
  * Rationale for the return values:  docs/03-supervisor-spec.md §5
  *

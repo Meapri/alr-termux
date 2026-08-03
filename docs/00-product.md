@@ -6,21 +6,21 @@
 
 ## 2. 타깃
 
-- **디바이스**: arm64. **검증된 것은 아래 한 칸뿐이다.**
+- **디바이스**: arm64. **Android 16 에서 벤더 2곳 검증됨. 다른 Android 릴리스는 전부 미검증이다.**
 
 | | 상태 |
 |---|---|
-| MediaTek MT8775, Android 16 (커널 `6.1.145-android14`) | **검증됨.** 이 문서의 모든 실측 수치가 나온 유일한 기기 |
-| Snapdragon (전 릴리스) | **미검증.** 기기 없음 |
-| Android 12 / 13 / 14 / 15 | **미검증.** 기기 없음 |
+| MediaTek MT8775, Android 16 (커널 `6.1.145-android14`) | **검증됨** — 수용 78, 폭 96/96 |
+| Qualcomm Snapdragon 8 Elite SM8750, Android 16 (커널 `6.6.98-android15`) | **검증됨** — 수용 78, 폭 96/96 ([M19](evidence/2026-08-03-m19-snapdragon.md)) |
+| Android 12 / 13 / 14 / 15 (벤더 무관) | **미검증.** 기기 없음 |
 
-> ⚠️ **이 표의 빈칸이 v1 의 가장 큰 미해결 항목이다.** 기능 결함이 아니라 커버리지 결함이며, 코드로 메울 수 없다.
+> ✅ **벤더·커널 축은 닫혔다.** 두 기기는 SoC 벤더가 다르고 커널도 6.1-android14 대 6.6-android15 로 갈리는데, **zygote 차단 syscall 239개 집합이 완전히 동일하다**([§A6](01-platform-facts.md)). 수용 78종, 호환성 폭 96/96, 슈퍼바이저 12/12, `path_traps=0 syscall_stops=0` 도 모두 같다.
 >
-> 왜 릴리스마다 재야 하는가: 이 설계의 근간이 zygote seccomp allowlist 인데 **그것이 릴리스마다 다르다**(android12 365줄 → android16 392줄, [§A6](01-platform-facts.md)). 한 릴리스에서 통과한 syscall 집합이 다른 릴리스에서 같다는 보장이 없다. 즉 "Android 16 에서 96/96" 은 "Android 12 에서도 될 것" 을 **뜻하지 않는다.**
+> ⚠️ **남은 축은 Android 릴리스 하나이고, 그것이 하필 제일 중요한 축이다.** 이 설계의 근간인 zygote seccomp allowlist 는 **릴리스마다 커졌다**(android12 365줄 → android16 392줄). 두 기기가 갈린 축(벤더·커널)은 전부 무관했는데 **정작 allowlist 가 실제로 따라가는 축은 고정된 채였다.** 즉 이 결과는 "OEM 은 상관없다" 의 강한 증거이고, "Android 12 에서도 될 것" 의 증거는 **아니다.**
 >
-> 벤더 차이도 같은 이유로 미지수다 — SoC 자체보다 OEM 이 커널·정책에 무엇을 얹었는지가 갈린다.
+> **현재 정직한 지원 선언은 "Android 16 에서 검증, 벤더 무관" 이다.** 다른 Android 릴리스의 기기에서 처음 할 일은 `alr doctor` 로 차단 목록을 뽑아 `scripts/diff-sweep.sh` 로 [`docs/evidence/sweeps/`](evidence/sweeps/) 와 비교하는 것이다.
 >
-> **따라서 현재 정직한 지원 선언은 "Android 16 / MediaTek 1대에서 검증" 이다.** Snapdragon 을 주 타깃으로 적어 두었던 이전 문구는 측정을 앞선 주장이었으므로 철회한다. 다른 기기에서 처음 할 일은 `alr doctor` 로 [§A6](01-platform-facts.md) 의 차단 목록을 다시 뽑는 것이다.
+> **성능 배수는 기기별이다.** 같은 워크로드가 두 기기에서 `node` 콜드 6.60× 와 5.23× 로 갈린다. 배수를 인용할 때는 기기를 함께 쓴다([M19 §6.3](evidence/2026-08-03-m19-snapdragon.md)).
 - **호스트**: Termux **F-Droid / GitHub 빌드** (`targetSdkVersion=28`). Play Store 빌드는 **v1 미지원** (ADR 0005).
 - **게스트**: Ubuntu 24.04 (noble) arm64, glibc 2.39, `ports.ubuntu.com` 아카이브. Debian bookworm/trixie는 v1.1 목표.
 - **워크로드**: `git`, `node`(및 npm/npx), `codex`, `bash`, `apt`/`dpkg`, 일반 coreutils/빌드 툴체인.

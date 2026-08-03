@@ -99,7 +99,7 @@ bionic `SYSCALLS.TXT` + `SECCOMP_ALLOWLIST_{COMMON,APP}.TXT`를 `android12-relea
 
 검증된 선례: Chromium `sandbox/linux/bpf_dsl/seccomp_macros.h` aarch64 분기 — `SECCOMP_REG(ctx,r) ((ctx)->uc_mcontext.regs[r])`, `SECCOMP_SYSCALL(ctx) SECCOMP_REG(ctx,8)`, `SECCOMP_IP(ctx) (ctx)->uc_mcontext.pc`.
 
-### A6. 차단 syscall 목록 — `SOURCE` + `MEASURED` (기기 1대 스윕 완료)
+### A6. 차단 syscall 목록 — `SOURCE` + `MEASURED` (기기 2대 스윕 완료, 집합 동일)
 
 `SECCOMP_BLOCKLIST_APP.TXT`에 명시된 것: `setuid`/`setgid`/`setreuid`/`setregid`/`setresuid`/`setresgid`/`setfsuid`/`setfsgid`/`setgroups` 전체, `adjtimex`, `clock_adjtime`, `clock_settime`, `settimeofday`, `acct`, `syslog`, **`chroot`**, `init_module`, `delete_module`, **`mount`**, **`umount2`**, `swapon`, `swapoff`, `setdomainname`, `sethostname`, `reboot`.
 
@@ -122,10 +122,31 @@ allowlist 부재로 차단되는 것(확인됨): `set_robust_list`(99), `get_rob
 > 게스트에서 직접 불러 확증했다: `shmget`/`semget`/`msgget` 전부 `ENOSYS`(테이블 기본값)를 받고, 같은 실행의 `ALR_LOG`가 SIGSYS 트랩 **3건**을 에뮬레이션했다고 보고한다 — 즉 커널이 실제로 TRAP을 냈고 슈퍼바이저가 받아냈다. 근거: [M16 §1](evidence/2026-08-03-m16-ipc-audit.md) (프로브 소스 `tests/device/probe_ipc.c`).
 > **결과**: R9이 걸어 둔 조건("막지 않는다면 업스트림 `fakeroot`를 그대로 쓴다")이 성립하지 않는다. SysV IPC 백엔드를 쓰는 fakeroot는 게스트에서 동작할 수 없으므로 자체 shim(또는 IPC를 안 쓰는 변종)만 남는다.
 
-> `PENDING_DEVICE` — **없어진 게 아니라 범위가 좁아졌다.** 위 스윕은 **기기 1대**의 결과다(SM-X236N / MediaTek MT8775 / Android 16 / 커널 6.1.145-android14). allowlist는 릴리스마다 늘어났고(android12 365줄 → android16 392줄) OEM이 갈릴 수 있으므로, 이 239개를 "Android의 차단 집합"이라고 부를 근거는 아직 없다. 지금은 "이 기기의 차단 집합"이다.
-> **무엇이 이것을 끝내는가**: 다른 OEM/SoC 기기 한 대, 그리고 Android 12~15 중 한 대에서 같은 `alr doctor` 스윕을 돌려 `alr_sigsys_table.h`의 ground-truth 집합과 **diff**한다. 차이가 0이면 표를 고정 상수로 취급할 수 있고, 아니면 표는 영구히 기기별 생성물로 남아야 한다(그 경우 표를 릴리스에 동봉하는 현재 방식이 틀린 것이 된다).
-> 같은 스윕이 위 `openat2`/`faccessat2` 질문(구버전 Android에서도 허용인가)도 함께 답한다. 두 질문의 blocker가 같으므로 따로 재지 않는다.
-> **무엇이 막고 있는가**: 참조 기기 #2가 없다. 기술적 장애물은 없다 — 스윕은 구현되어 있고 앱 프로세스 안에서 자족적으로 돈다. `PTRACE_SECCOMP_GET_FILTER`로 필터를 읽어 지름길을 낼 수는 없다(`CAP_SYS_ADMIN` 필요). 스윕이 유일한 길이다.
+> ✅ **SoC·커널이 갈려도 차단 집합은 같다 — 기기 2대 diff 완료** `MEASURED` 2026-08-03. ([M19](evidence/2026-08-03-m19-snapdragon.md))
+>
+> | | 참조 #1 | 참조 #2 |
+> |---|---|---|
+> | 기기 | SM-X236N | SM-S937N (Galaxy S25 Edge) |
+> | SoC | MediaTek MT8775 | **Qualcomm** Snapdragon 8 Elite SM8750 |
+> | 커널 | 6.1.145-**android14** | **6.6.98-android15** |
+> | 컨텍스트 | uid=10297 Seccomp=2 `untrusted_app_27` | uid=10447 Seccomp=2 `untrusted_app_27` |
+> | 차단 | 468개 중 **239** | 468개 중 **239** |
+>
+> **239개 집합이 완전히 동일하다.** 개수만 같은 게 아니라 전체 diff에서 양쪽 모두 0이다:
+> ```
+> $ scripts/diff-sweep.sh docs/evidence/sweeps/mediatek-mt8775-android16-k6.1.txt \
+>                         docs/evidence/sweeps/snapdragon-8elite-android16-k6.6.txt
+> ALR SWEEP DIFF: IDENTICAL (239 syscalls, both devices)
+> ```
+> 위 문단의 음성 주장(147/148/150 비차단)도 양쪽에서 성립한다. **이게 결정적인 부분이다** — 범위 필터였다면 이웃한 143–152와 함께 쓸려 갔을 번호들이라, 개수 우연이 아니라 지문 일치다.
+>
+> **결과**: `alr_sigsys_table.h`를 릴리스에 동봉하는 현재 방식이 옳다. 표는 기기별 생성물이 아니라 **기본값**으로 취급할 수 있고, `alr doctor`는 여전히 재생성 수단으로 남는다.
+>
+> **남은 변수는 Android 릴리스 하나다.** 두 기기 모두 Android 16이다. 갈린 것(SoC 벤더, 커널 6.1→6.6, android14→android15 공통 브랜치)은 전부 무관했고, **정작 allowlist가 실제로 따라가는 축**(android12 365줄 → android16 392줄)은 고정된 채로 남았다. 즉 이 결과는 "OEM은 상관없다"는 강한 증거이고 "Android 버전도 상관없다"는 증거는 **아니다**.
+> **무엇이 이것을 끝내는가**: Android 12~15 중 한 대에서 같은 스윕 후 `scripts/diff-sweep.sh`. 같은 스윕이 위 `openat2`/`faccessat2` 질문도 함께 답한다 — blocker가 같으므로 따로 재지 않는다.
+> **무엇이 막고 있는가**: 구버전 Android 기기가 없다. 기술적 장애물은 없다. `PTRACE_SECCOMP_GET_FILTER`로 필터를 읽는 지름길은 여전히 불가(`CAP_SYS_ADMIN` 필요)하므로 스윕이 유일한 길이다.
+>
+> 스윕 원본은 이제 [`docs/evidence/sweeps/`](evidence/sweeps/)에 그대로 들어간다. 이전에는 `alr_sigsys_table.h` 끝의 `#if 0` 블록에만 있었고, 이번 diff는 표 행만 grep한 탓에 **"원본이 없어서 비교 불가"라고 결론 내릴 뻔했다.**
 
 ---
 

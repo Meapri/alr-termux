@@ -157,6 +157,9 @@ esac
 
 echo
 echo "─────────────────────────────────────────────────────────────"
-echo "  NOTE both A/B lines are single-session numbers from ONE device"
-echo "  (MediaTek MT8775 / Android 16).  docs/00-product.md §2 has the"
-echo "  coverage table; a second device is what would make them general."
+echo "  NOTE single-session numbers from the device this just ran on:"
+echo "    $(getprop ro.product.model 2>/dev/null || echo '?') / $(getprop ro.board.platform 2>/dev/null || echo '?') / Android $(getprop ro.build.version.release 2>/dev/null || echo '?') / $(uname -r)"
+echo "  Ratios are workload- AND device-specific -- the same suite gives"
+echo "  6.60x on MediaTek MT8775 and 5.23x on Snapdragon 8 Elite for node"
+echo "  cold start.  Quote a multiplier with the device beside it."
+echo "  docs/00-product.md §2 has the coverage table."
