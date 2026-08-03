@@ -135,10 +135,22 @@ UNENFORCED = [
 ]
 
 SOFT = [
-    ("git_status_10k_ms", 1.10),
-    ("npm_ci_ms", 1.10),
     ("node_cold_ms", 1.10),
     ("exec_per_sec", None),      # higher is better; handled separately
+]
+
+# Listed in docs/07-acceptance.md §3's soft gates and measured by NOTHING.
+# git_status_10k_ms and npm_ci_ms have no PAT entry, so the SOFT loop -- which
+# skips absent keys silently, unlike HARD -- could never have compared them.
+# §3 told a reader that an npm ci regression past 10% gets warned about; it
+# does not.  Same shape as preload.malloc_calls, so it gets the same treatment:
+# printed as UNENFORCED every run, where the gap is visible in the gate's own
+# output rather than only to whoever reads the source.
+UNMEASURED_SOFT = [
+    ("git_status_10k_ms", "no harness emits it; the git status A/B is run by "
+                          "hand (M19 §6.1), not by tests/device/"),
+    ("npm_ci_ms", "no harness emits it; npm ci was measured once by hand "
+                  "(M12 §4) and never wired into bench.sh"),
 ]
 
 DEVICE_PAT = r"ALR BENCH DEVICE:\s*(\S+)"
@@ -508,6 +520,8 @@ def main_with(argv=None):
 
     for key, desc, why in UNENFORCED:
         print("  %-28s UNENFORCED  %s" % (key, why))
+    for key, why in UNMEASURED_SOFT:
+        print("  %-28s UNMEASURED  %s" % (key, why))
 
     # Soft baselines are PER DEVICE.  Timing numbers from one phone are not a
     # yardstick for another: the two reference devices differ by ~7% on node

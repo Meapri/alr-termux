@@ -17,7 +17,7 @@ ALR=${ALR:-./alr}
 export ALR_ROOT_DIR=${ALR_ROOT_DIR:-$HOME/alr-distros}
 R="$ALR_ROOT_DIR/${ALR_DISTRO:-ubuntu-24.04}"
 
-pass=0; fail=0; known=0; skip=0
+pass=0; fail=0; known=0; skip=0; pending=0
 
 emit() { # emit <NAME> <PASS|FAIL|SKIP|KNOWN_FAIL:reason> [detail]
     printf '%-38s %s' "$1:" "$2"
@@ -28,6 +28,7 @@ emit() { # emit <NAME> <PASS|FAIL|SKIP|KNOWN_FAIL:reason> [detail]
         FAIL) fail=$((fail+1));;
         SKIP) skip=$((skip+1));;
         KNOWN_FAIL*) known=$((known+1));;
+        PENDING_DEVICE*) pending=$((pending+1));;
     esac
 }
 
@@ -336,7 +337,16 @@ if [ -x "$R/usr/local/bin/codex" ]; then
 # not the rootfs.  `codex --version` succeeding proves the binary executes -- it
 # does NOT prove codex operates inside the guest.  Track the linkage so a future
 # dynamic build is noticed rather than assumed.
-if llvm-readelf -d "$R/usr/local/bin/codex" 2>/dev/null | grep -q NEEDED; then
+# POSITIVE CONTROL FIRST.  Without it this check cannot fail: if llvm-readelf
+# is absent the pipeline produces nothing, grep matches nothing, and the else
+# branch reports "static as expected" -- a missing TOOL and a real measurement
+# give the same PASS.  That is the identical defect fixed ten lines below in
+# PRELOAD LINK FALLBACK; a negative is evidence only when the instrument is
+# known to answer.  /bin/bash is dynamic on any sane rootfs, so if the tool
+# cannot find NEEDED in THAT, it is the tool that is broken.
+if ! llvm-readelf -d "$R/bin/bash" 2>/dev/null | grep -q NEEDED; then
+    emit "ALR CODEX LINKAGE" SKIP "llvm-readelf unusable; cannot classify"
+elif llvm-readelf -d "$R/usr/local/bin/codex" 2>/dev/null | grep -q NEEDED; then
     emit "ALR CODEX LINKAGE" PASS "dynamic - preload reaches it"
 else
     # NOT a KNOWN_FAIL: that token means "we want this and it does not work".
@@ -543,6 +553,13 @@ $ALR run /bin/bash -c 'echo x > /dev/full' 2>&1 | grep -qi 'no space left' \
 
 echo
 echo "─────────────────────────────────────────────────────────────"
-echo "  PASS=$pass  FAIL=$fail  KNOWN_FAIL=$known  SKIP=$skip"
+# PENDING_DEVICE is in the status vocabulary (docs/07 §1) and the milestone
+# rules depend on it, and until now emit() had no arm for it and no runner used
+# it -- a status nothing could produce or count is a word, not a status.
+if [ "${pending:-0}" -gt 0 ]; then
+    echo "  PASS=$pass  FAIL=$fail  KNOWN_FAIL=$known  SKIP=$skip  PENDING_DEVICE=$pending"
+else
+    echo "  PASS=$pass  FAIL=$fail  KNOWN_FAIL=$known  SKIP=$skip"
+fi
 echo "ALR DEVICE ACCEPTANCE: $([ $fail -eq 0 ] && echo PASS || echo FAIL)"
 exit $([ $fail -eq 0 ] && echo 0 || echo 1)
