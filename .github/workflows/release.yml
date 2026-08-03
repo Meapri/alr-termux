@@ -83,6 +83,13 @@ jobs:
       - name: preload gates
         run: bash scripts/check-preload.sh
 
+      # check-preload.sh builds into a scratch dir on purpose (it verifies
+      # reproducibility by building twice into isolated caches), so build/ is
+      # still empty at this point.  make-release.sh consumes build/ and refuses
+      # without it -- which is how the first tag failed, correctly.
+      - name: build the guest .so into build/
+        run: scripts/build-preload.sh
+
       - name: build release tarball
         run: scripts/make-release.sh
 
