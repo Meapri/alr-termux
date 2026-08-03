@@ -220,13 +220,21 @@ alr update-components ubuntu-24.04   libalr_preload.so 만 갱신
 
 ## 7. 실패 분류
 
-모든 프로비저닝 실패는 안정적 `reason=` 코드를 갖는다.
+모든 실패는 안정적 `reason=` 코드를 갖는다. **이 목록은 코드가 실제로 방출하는 것과 정확히 일치해야 한다** — `scripts/check-reasons.sh` 가 양방향으로 검사하고 `make check` 에 걸려 있다.
 
 ```
-download-network          download-checksum-mismatch    download-404
-extract-traversal-reject  extract-disk-full             extract-permission
-repair-write-failed       ldso-missing                  ldso-option-unsupported
-boot-failed               boot-sigsys                   boot-enoent
-apt-update-failed         apt-install-failed            node-fetch-failed
-codex-fetch-failed        unsupported-android-policy
+already-installed          bad-env                    bad-option
+bad-workdir                boot-enoent                boot-failed
+doctor-missing             doctor-unknown-option      download-corrupt
+download-network           env-reserved               extract-permission
+ldso-missing               no-supervisor-requested    preload-install-failed
+preload-missing-in-rootfs  preload-stale              rootfs-missing
+too-many-env               unhooked-static-binary     unsupported-distro
+workdir-enoent
 ```
+
+> ⚠️ **이 목록은 2026-08-03 에 실측으로 다시 썼다.** 이전 판은 17개를 적어 두었는데 코드가 방출하는 것은 22개였고 **겹치는 것이 5개뿐**이었다(`download-network` `extract-permission` `ldso-missing` `boot-failed` `boot-enoent`). 목표 [G6](00-product.md) 은 "모든 실패가 안정적 `reason=` 코드로 분류된다" 이고 그 측정 수단이 이 어휘인데, **어느 쪽도 지키지 않는 어휘는 G6 을 참으로도 거짓으로도 만들 수 없다.** 그래서 G6 은 목표가 아니라 문장이었다.
+>
+> 지워진 12개는 **구현되지 않은 기능의 코드**였다 — `extract-traversal-reject`(자체 untar, §2), `apt-*-failed`, `node-fetch-failed`, `codex-fetch-failed`, `download-404`, `extract-disk-full`, `repair-write-failed`, `boot-sigsys`, `ldso-option-unsupported`, `unsupported-android-policy`. **그 기능이 들어오면 코드와 함께 이 목록으로 돌아온다** — 게이트가 그때 강제한다. 미리 적어 두는 것은 계약이 아니라 약속이다.
+>
+> `download-checksum-mismatch` 는 같은 뜻의 `download-corrupt` 로 이미 출하됐다(v0.3.0). **출하된 코드가 안정 계약**이므로 스펙 쪽을 버렸다.

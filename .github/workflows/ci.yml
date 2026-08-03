@@ -85,6 +85,12 @@ jobs:
       - name: doc link gate
         run: make check-docs
 
+      # G6 says every failure carries a stable reason= code, and the vocabulary
+      # that measures it had drifted to a five-code overlap with reality.  Both
+      # directions, so neither side can rot.  No device, no toolchain.
+      - name: reason= registry gate
+        run: bash scripts/check-reasons.sh
+
       # The scraper once answered node_cold_ms with the exec-throughput number
       # from the next line, and --update wrote it into the baseline as fact.  A
       # regex that matches the wrong thing looks exactly like one that works,

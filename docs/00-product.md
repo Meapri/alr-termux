@@ -62,7 +62,7 @@
 | G3 | **MEASURED 달성** | 수용 테스트가 매 실행 `path_traps=0 syscall_stops=0` 보고 |
 | G4 | **MEASURED 달성** | proot-distro 대비 `git status` **25.8×** (양쪽 git 2.53.0 동일, 워밍업 후 — [M19 §6.1](evidence/2026-08-03-m19-snapdragon.md)). 34.8× 는 git 빌드가 셋 다 달랐던 M8 수치라 인용하지 않는다 |
 | G5 | **MEASURED 달성** | `node`/`npm` 은 동적 링크라 경로 가상화가 적용된다 — `npm ci` 실측 proot-distro 대비 **3.12×** ([M12](evidence/2026-08-03-m12-spawn-resolver.md)). codex 는 [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 G5 에서 뺐다(정적 링크, 원리적으로 후킹 불가) |
-| G6 | **미달성** | `die()` 가 `reason=` 을 내지만 호출은 10곳뿐이고, `alr.c` 의 나머지 stderr 실패 경로 23곳에는 코드가 없다. **이를 검사하는 수용 항목도 없다** — 즉 회귀도 잡히지 않는다. v1 목표 중 유일하게 못 지킨 항목이다 |
+| G6 | **부분 달성** | 어휘가 이제 **강제된다** — `scripts/check-reasons.sh` 가 방출 코드와 [05 §7](05-provisioning-spec.md) 목록을 **양방향**으로 검사하고 `make check`·CI 에 걸려 있다(현재 22/22 일치). **남은 것**: `alr.c` 의 일부 stderr 실패 경로에 아직 코드가 없다 — 어휘는 지켜지지만 전수는 아니다 |
 
 > ⚠️ **codex 는 비목표다**([ADR 0008](adr/0008-static-guest-binaries-non-goal.md)). `--with codex` 로 설치·실행은 되지만 **경로 가상화 없이 돈다.** 아래는 그 근거이며, `alr` 은 정적 ELF 를 실행할 때 한 줄로 경고한다.
 >
