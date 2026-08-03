@@ -60,6 +60,14 @@ mkdir -p "$(dirname "$OUT")"
     `# Linux/alr-termux" vs "/home/runner/work/alr-termux/alr-termux".` \
     `# -ffile-prefix-map covers debug info and __FILE__ together.` \
     -ffile-prefix-map="$PWD"=. \
+    `# clang takes DW_AT_comp_dir from the CWD, and whether -ffile-prefix-map` \
+    `# covers it has varied across clang versions.  Set it explicitly so the` \
+    `# answer does not depend on which clang zig bundles this month.` \
+    -fdebug-compilation-dir=. \
+    `# The build-id is a hash of the content, so it is deterministic -- but` \
+    `# only if everything feeding it already is.  Dropping it removes one` \
+    `# more thing to reason about in an artifact nobody debugs from a core.` \
+    -Wl,--build-id=none \
     -I src/common \
     ${ALR_CFLAGS_EXTRA:-} \
     -o "$OUT" $SRC

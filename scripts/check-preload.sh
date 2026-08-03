@@ -209,9 +209,18 @@ if build_elsewhere 2; then
         emit "PRELOAD REPRODUCIBLE" PASS "sha256=$h1 (rebuilt from another path)"
     else
         emit "PRELOAD REPRODUCIBLE" FAIL "build1=$h1 build2=$h2"
-        echo "    The second build ran from a different directory.  A"
-        echo "    difference here is almost always an embedded absolute path:"
-        echo "      strings <so> | grep \"\$PWD\""
+        echo "    The second build ran from a different directory, so a"
+        echo "    difference is almost always an embedded absolute path."
+        # Say WHAT differs.  A gate that reports two hashes and leaves the
+        # cause to be guessed at costs a CI round trip per hypothesis; this
+        # one cost several before the diagnostics were added.
+        echo "    first differing byte:"
+        cmp -l "$SO" "$TMP/2/libalr_preload.so" 2>/dev/null | head -1 | sed 's/^/      /'
+        echo "    strings present in one build and not the other:"
+        strings "$SO" 2>/dev/null | sort -u > "$TMP/s1.txt"
+        strings "$TMP/2/libalr_preload.so" 2>/dev/null | sort -u > "$TMP/s2.txt"
+        diff "$TMP/s1.txt" "$TMP/s2.txt" 2>/dev/null | head -12 | sed 's/^/      /'
+        echo "    sizes: $(wc -c < "$SO") vs $(wc -c < "$TMP/2/libalr_preload.so")"
     fi
 else
     emit "PRELOAD REPRODUCIBLE" FAIL "second build did not complete"
