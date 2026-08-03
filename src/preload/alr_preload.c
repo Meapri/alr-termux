@@ -69,7 +69,7 @@ static __thread int g_suppress;
  * more precise than strace, because it counts exactly the calls this layer
  * actually handles -- relative-path misses included, which strace cannot
  * distinguish from any other openat. */
-static unsigned long g_n_total, g_n_rewritten, g_n_rel, g_n_sysdir;
+static unsigned long g_n_total, g_n_rewritten, g_n_rel, g_n_sysdir, g_n_underroot;
 
 #define RW(p, buf) alr_rw((p), g_root, g_root_len, (buf), sizeof (buf), NULL)
 
@@ -106,10 +106,38 @@ static inline const char *rw(const char *p, char *buf, size_t bufsz)
     if (g_suppress) return p;
     r = alr_rw(p, g_root, g_root_len, buf, bufsz, NULL);
     if (g_count) {
-        g_n_total++;
-        if (r == buf)                       g_n_rewritten++;
-        else if (p && p[0] != '/')          g_n_rel++;
-        else if (p && alr_is_sysdir(p))     g_n_sysdir++;
+        /* The classification must be TOTAL -- every counted call lands in
+         * exactly one bucket.  It used to be an if/else-if chain with no
+         * else, so an absolute path that was neither rewritten nor a sysdir
+         * (i.e. already under the root, or NULL) incremented g_n_total and
+         * nothing else.  MEASURED on a 10k git status: total=10067 against
+         * 28+10008+1=10037, a silent 30-call hole.
+         *
+         * That matters because these counts are the call-mix half of the
+         * rewrite total-cost budget (docs/04-preload-spec.md §13).  A bucket
+         * with no counter is a bucket the cost model cannot price, so it
+         * would be costed at zero -- an unbounded understatement in
+         * principle, however small it happens to be today.
+         *
+         * rw_cost.c already measures this case ("already-under-root"), so the
+         * per-op figure to pair with it exists; only the count was missing.
+         *
+         * The increments are ATOMIC.  Plain ++ lost updates under git, whose
+         * index refresh is multi-threaded: the buckets summed to 119 less
+         * than total on a 10k status, about 1.2%, while single-threaded id
+         * and cat were exact.  Relaxed ordering is enough -- these are
+         * independent counters read only after every thread has joined, and
+         * nothing else is ordered against them.  The cost is irrelevant
+         * because this whole block is behind g_count, which is off unless
+         * ALR_COUNT=1 is set for a measurement run.
+         */
+#define CNT(x) __atomic_fetch_add(&(x), 1UL, __ATOMIC_RELAXED)
+        CNT(g_n_total);
+        if (r == buf)                       CNT(g_n_rewritten);
+        else if (p && p[0] != '/')          CNT(g_n_rel);
+        else if (p && alr_is_sysdir(p))     CNT(g_n_sysdir);
+        else                                CNT(g_n_underroot);
+#undef CNT
     }
     return r;
 }
@@ -238,8 +266,9 @@ static void alr_dtor(void)
     int n;
     if (!g_count || g_log_fd < 0) return;
     n = snprintf(b, sizeof b,
-                 "alr rw: total=%lu rewritten=%lu relative=%lu sysdir=%lu\n",
-                 g_n_total, g_n_rewritten, g_n_rel, g_n_sysdir);
+                 "alr rw: total=%lu rewritten=%lu relative=%lu sysdir=%lu "
+                 "underroot=%lu\n",
+                 g_n_total, g_n_rewritten, g_n_rel, g_n_sysdir, g_n_underroot);
     if (n > 0) { ssize_t w = write(g_log_fd, b, (size_t)n); (void)w; }
 }
 
@@ -282,6 +311,32 @@ static void alr_init(void)
 
     l = getenv("ALR_LOG");        g_log = l ? atoi(l) : 0;
     l = getenv("ALR_LOG_FD");     g_log_fd = l ? atoi(l) : -1;
+
+    /* Move the log fd out of the guest program's reach.
+     *
+     * MEASURED 2026-08-03: `ALR_COUNT=1 alr run /bin/echo hi` printed no
+     * "alr rw:" line at all, 0 times out of 10, while /bin/true printed one
+     * 10 times out of 10.  Not a race -- deterministic per binary.  The cause
+     * is that alr passes ALR_LOG_FD=2, and GNU coreutils registers gnulib's
+     * close_stdout with atexit, which closes stdout AND STDERR.  glibc runs
+     * atexit handlers before _dl_fini, so by the time this library's
+     * destructor writes its totals, fd 2 is gone.  The write fails, the
+     * return value was already being discarded, and the line vanishes.
+     *
+     * That silence is the dangerous part: a consumer summing these lines
+     * would have quietly dropped every coreutils process in a pipeline and
+     * reported a smaller total than the truth.  Proven by re-running the same
+     * command with the log on fd 9, where /bin/echo does emit.
+     *
+     * So: duplicate onto a high fd nothing in a normal program touches.
+     * CLOEXEC is correct rather than a leak -- each exec'd process re-runs
+     * this init and re-duplicates from the inherited original.
+     */
+    if (g_log_fd >= 0) {
+        int hi = fcntl(g_log_fd, F_DUPFD_CLOEXEC, 900);
+        if (hi >= 0) g_log_fd = hi;
+        /* On failure keep the original fd: degraded, not broken. */
+    }
     g_guest_exe = getenv("ALR_GUEST_EXE");
     /* Every guest process is exec'd as the LOADER (ADR 0002), so the kernel
      * records "ld-linux-aarch64" as the task name and it surfaces in

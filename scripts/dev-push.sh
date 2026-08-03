@@ -75,11 +75,17 @@ accept)
         ${ALR_DISTROS_DIR:+ALR_ROOT_DIR=\$HOME/$ALR_DISTROS_DIR }ALR=./alr tests/device/acceptance.sh"
     ;;
 bench)
+    # Was: build rw_cost and run it bare.  That printed per-op costs and a
+    # MODELED total; it could not produce the total-cost budget docs/04 §13
+    # actually states, because that needs the call mix as well.  rw_bench.sh
+    # measures both halves on the device and prices one with the other.
     assert_context
     sync_tree
     "${SSH[@]}" "cd ~/$REMOTE && \
-        clang -O2 -Wall -Isrc/common -o rw_cost bench/microbench/rw_cost.c && \
-        ./rw_cost"
+        clang $CFLAGS_DEV -Isrc/common -Isrc/supervisor -o alr \
+              src/cli/alr.c src/cli/alr_resolvd.c src/common/alr_exec_rule.c src/common/alr_elf.c src/supervisor/alr_supervisor.c && \
+        chmod +x tests/device/rw_bench.sh && \
+        ${ALR_DISTROS_DIR:+ALR_ROOT_DIR=\$HOME/$ALR_DISTROS_DIR }ALR=./alr tests/device/rw_bench.sh"
     ;;
 bench-ab)
     assert_context

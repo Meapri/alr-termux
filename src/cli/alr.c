@@ -1033,8 +1033,22 @@ static char **build_env(const struct launch *L, const char *guest_exe,
     PUT("LC_ALL=%s", "C.UTF-8");
     if (L->have_preload) PUT("LD_PRELOAD=%s", L->preload);
     if (getenv("ALR_FAKEROOT")) PUT("ALR_FAKEROOT=%s", getenv("ALR_FAKEROOT"));
-    if (getenv("ALR_COUNT")) { PUT("ALR_COUNT=%s", getenv("ALR_COUNT"));
-                               PUT("ALR_LOG_FD=%d", 2); }
+    /* ALR_LOG_FD is honoured from the caller when set, defaulting to 2.
+     *
+     * It used to be hardcoded to 2 here, and a harness that asked for fd 9 got
+     * it only by accident: the environ copy loop above runs first, so the
+     * inherited ALR_LOG_FD=9 landed earlier in envp and getenv(3) returned it
+     * before reaching this hardcoded 2.  Working by ordering is not working.
+     *
+     * The fd matters because stderr is not a safe channel for it: GNU
+     * coreutils closes stderr from an atexit handler, before the destructor
+     * that prints the counters runs, so the line silently disappears
+     * (MEASURED: /bin/echo emitted nothing 10 runs out of 10). */
+    if (getenv("ALR_COUNT")) {
+        const char *lf = getenv("ALR_LOG_FD");
+        PUT("ALR_COUNT=%s", getenv("ALR_COUNT"));
+        PUT("ALR_LOG_FD=%s", lf && *lf ? lf : "2");
+    }
     if (g_resolv_sock) PUT(ALR_RESOLV_ENV "=%s", g_resolv_sock);
 #undef PUT
 

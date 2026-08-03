@@ -67,3 +67,9 @@ compile_commands.json
 # Machine-local agent permissions; the shared .claude/settings.json (if one is
 # ever added) stays tracked.
 .claude/settings.local.json
+
+# Python bytecode. A .pyc for bench/regression_gate.py was committed by
+# accident and would have shipped inside the tag's source archive, and thus
+# inside the termux recipe's TERMUX_PKG_SHA256.
+__pycache__/
+*.pyc

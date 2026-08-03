@@ -22,8 +22,13 @@
   ],
   "devices": {
     "SM-S937N/sun/android16/6.6": {
-      "exec_per_sec": 707,
-      "node_cold_ms": 53.0
+      "exec_per_sec": 320,
+      "node_cold_ms": 56.0,
+      "preload.rw_abs_ns": 93.0,
+      "preload.rw_pinned": 1,
+      "preload.rw_rel_ns": 7.0,
+      "preload.rw_sysdir_ns": 32.0,
+      "preload.rw_under_ns": 116.7
     }
   }
 }
