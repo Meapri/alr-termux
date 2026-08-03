@@ -155,7 +155,7 @@ exec당 절대 오버헤드는 **+4~8 ms**다(같은 문서의 두 측정: 21→
 
 > M12가 적어 둔 caveat는 그대로 유효하다: proot 게스트가 26.04, alr 게스트가 24.04이고 단일 MediaTek 기기 1회 세션이다. 그건 배수의 **정밀도** 문제이지 R5(오버헤드가 벤치를 잡아먹는가)의 답을 바꾸지 않는다.
 
-### R6. `auditallow` 로그 볼륨 — `PENDING_DEVICE` (측정 시도했고, 막힌 지점을 안다)
+### R6. `auditallow` 로그 볼륨 — `PENDING_DEVICE` (귀속만 미해결, 위험은 해소)
 
 `untrusted_app_27`은 `execute`와 `execute_no_trans` 양쪽에 `auditallow`가 걸려 있다. 게스트의 모든 execve와 모든 `.so` 매핑이 logd에 감사 레코드를 남긴다. Node 하나가 시작 시 `.so` ~40개 → 레코드 ~40개.
 
@@ -170,11 +170,26 @@ logcat -b main   -d | wc -l   → 8     ← 양성 대조: 계측기 자체는 �
 
 `events`만 비고 `main`은 내용이 있다. Android는 events 버퍼를 권한 있는 리더에게만 연다. **이 `0`은 "오버헤드 없음"이 아니라 권한 실패다.** 그대로 기록할 뻔했다.
 
-**무엇이 이것을 끝내는가**: exec 집약 워크로드(`git rebase`, npm postinstall)를 **Termux 앱 컨텍스트에서** 돌리면서 `adb logcat -b events`를 **기기 밖에서** 켜 두고 워크로드 전후 레코드 수의 차를 잰다. 게스트 실행은 반드시 실제 앱 컨텍스트여야 하지만(`uid>=10000 ∧ Seccomp=2`), 로그를 *읽는* 쪽은 adb여도 유효하다 — 관찰이 실행 조건을 바꾸지 않기 때문이다.
+**adb 로도 안 됐다** — 위 문단은 원래 "기기 밖 관찰자(adb)를 붙이면 된다" 로 끝나 있었다. 이 저장소의 하네스는 **이미 adb 를 쓴다**(`dev-push.sh` 의 `adb forward`). 바로 해 봤고, 버퍼별 양성 대조를 먼저 돌렸다:
 
-**오늘 무엇이 막는가**: 지금 계측은 전부 기기 안(ssh→Termux)에서 돈다. 기기 밖 관찰자가 붙은 세션이 필요하다. **코드 문제가 아니라 측정 하네스 문제다.**
+```
+adb shell logcat -b events -d | wc -l   → 18,552   (읽힌다)
+adb shell logcat -b main   -d | wc -l   → 379,191  (읽힌다)
+adb shell logcat -b kernel -d | wc -l   → 0        ← 안 읽힌다
+adb shell logcat -b all    -d | grep -c avc → 0
+```
 
-**그때까지의 규칙**: 오버헤드 수치를 낼 때 auditallow 비용을 "0"이나 "무시 가능"으로 적지 않는다. M8의 기동 +4~8 ms 안에 **이미 포함되어 있다**는 것까지가 지금 말할 수 있는 전부이고, 그중 얼마가 감사 레코드인지는 모른다.
+**auditallow 레코드가 가는 곳은 커널 audit 서브시스템이고 `logcat -b kernel` 은 root 없이 열리지 않는다.** adb 는 앱 uid 를 넘겨 주지만 root 를 주지는 않는다. `selinux` 문자열 282건은 전부 `LocationAccessPolicy`·`thermal_core` 잡음이었다.
+
+**그래서 이 위험은 다시 읽어야 한다.** R6 의 원문은 "지배적인 **숨은** 비용일 수 있다" 였다. 레코드를 세지 못하는 것과 별개로, **숨어 있을 수가 없다**: `git status` 49 ms, 기동 28 ms, `npm ci` 2.00 s, exec 351/s — 이 숫자들은 전부 auditallow 가 일어나는 채로 측정됐고 우리가 발표하는 모든 수치 안에 이미 들어 있다.
+
+남는 것은 위험이 아니라 **귀속 질문**이다: 측정된 비용 중 몇 %가 감사 레코드인가.
+
+**무엇이 이것을 끝내는가**: root 로 커널 audit 을 읽어 레코드를 세거나, `auditallow` 가 없는 정책의 기기와 A/B 한다. 둘 다 오늘 없다.
+
+**그때까지의 규칙**: 오버헤드 수치를 낼 때 auditallow 를 "0" 이나 "무시 가능" 으로 적지 않는다. 반대로 **"측정되지 않은 추가 비용" 으로도 적지 않는다** — 이미 포함된 값이다.
+
+> ⚠️ 상한을 잡으려고 네이티브 exec 처리량과 비교했다가 **무효 측정**을 만들었다(native 137 vs alr 354 exec/s). alr 쪽이 빠르게 나왔는데, 양쪽이 다른 셸(Termux mksh vs 게스트 dash)·다른 libc·다른 ABI 라 exec 비용이 아니라 셸의 fork 루프를 잰 것이다. **숫자가 유리하게 나왔을 때 특히 의심할 것.** 기록은 [M16 §2.3](evidence/2026-08-03-m16-ipc-audit.md).
 
 ### ~~R7. Codex의 `rustix` raw-syscall 백엔드~~ — **답 나옴, 그리고 더 나쁘다** ✅ `MEASURED`
 
@@ -196,31 +211,27 @@ ALR_LOG=2 alr run …/codex --version | grep -c 'alr preload:' → 0    (대조:
 
 → 아래 §4의 **"정적 링크 게스트 바이너리"** 및 바로 그 아래 codex 행으로 이관. `KNOWN_FAIL:unhooked-static-binary`.
 
-### R8. Codex 샌드박스 비활성화 키 — 절반 확정, 나머지는 `PENDING_DEVICE`
+### R8. Codex 샌드박스 비활성화 키 — `PENDING_DEVICE` (쓰기는 확인, 읽히는지는 미확인)
 
-**확정된 것** — 기기의 `codex --help` ([M7](evidence/2026-08-02-m7-m8-workloads-perf.md)): CLI 플래그는 `-s, --sandbox <SANDBOX_MODE>`이고 설정 키 `sandbox_permissions`가 존재한다. M7은 이것으로 R8을 "해소"로 적었으나 **모드 이름은 열려 있었다.**
+**alr 이 실제로 하는 일** (`src/cli/alr.c` `with_codex()`, 2026-08-03 실측):
+`<R>/root/.codex/config.toml` 에 228 바이트를 쓴다 — `sandbox_mode = "danger-full-access"` 와 주석 3줄. 파일은 정상적으로 생성된다.
 
-**코드가 실제로 하는 것** — `src/cli/alr.c`의 `with_codex()`는 `<R>/root/.codex/config.toml`에 다음을 쓰고
+**음성 대조 3종 — 전부 무반응** ([M18](evidence/2026-08-03-m18-codex-config.md)):
 
-```
-sandbox_mode = "danger-full-access"
-```
+| 조작 | codex 반응 |
+|---|---|
+| 완전히 깨진 TOML (`=== not toml === [[[`) | `codex-cli 0.146.0` (동일) |
+| 파일 삭제 | `codex-cli 0.146.0` (동일) |
+| 존재하지 않는 모드 값 | `codex-cli 0.146.0` (동일) |
 
-`alr: NOTE codex sandbox disabled; alr is not a security boundary`를 출력한다. Landlock과 bubblewrap이 Android 앱 프로세스에서 동작하지 않으므로 Codex 자신의 샌드박스는 꺼야 한다는 판단은 옳다.
+**그러나 이것은 "읽지 않는다" 의 증명이 아니다.** `codex --version` 이 애초에 config 를 파싱하지 않는 조기 종료 경로일 수 있다 — php 가 `-h` 는 되고 `--version` 은 죽었던 것과 같은 구조다. 진짜 config 를 소비하는 명령은 인증·네트워크를 요구해 이 하네스에서 돌릴 수 없다.
 
-**남은 것은 두 가지이고 둘 다 추측이다.**
+**정황은 강하다**: codex 는 정적 musl 이라 `LD_PRELOAD` 가 닿지 않고([R7](#r7), [M12 §8](evidence/2026-08-03-m12-spawn-resolver.md)), 따라서 `~/.codex` 를 **Android 루트 기준**으로 푼다. Android 에는 `/root` 가 아예 없다(`ls -ld /root` → No such file or directory). 시작할 때마다 내는 `could not create PATH aliases: Read-only file system` 이 같은 방향을 가리킨다.
 
-1. **철자.** 기기에서 확인된 키는 `sandbox_permissions`인데 우리가 쓰는 것은 `sandbox_mode`이고, 모드 문자열 `danger-full-access`는 **어떤 실측에도 나오지 않는다.** 소스의 주석 자신이 "Confirm the exact mode name with `codex --help` for your version"이라고 적고 있다. R8이 금지한 "추측해서 하드코딩"이 아직 코드에 남아 있다.
-2. **그 파일을 Codex가 읽기는 하는가** — `UNVERIFIED`. R7이 확정했듯 Codex는 정적 링크라 경로 가상화가 없다. `alr`은 게스트에 `HOME=/root`를 넘기므로 Codex는 `/root/.codex/config.toml`을 **Android 루트** 기준으로 찾는다 — 우리가 쓴 `<R>/root/.codex/config.toml`이 아니다. **우리가 쓰는 설정을 아무도 읽지 않을 가능성이 높다.** 이건 코드와 [M12 §8](evidence/2026-08-03-m12-spawn-resolver.md)로부터의 추론이지 측정이 아니다.
+**결과적으로 `alr` 의 출력 문구를 고쳤다.** 이전에는 `NOTE codex sandbox disabled` 라고 단정했는데, 그건 우리가 아는 것보다 많은 주장이다. 지금은 "파일을 썼고, codex 가 그것을 읽는지 확인할 수 없으며, 어느 쪽이든 게스트는 샌드박스되지 않은 것으로 취급하라" 고 말한다.
 
-**무엇이 이것을 끝내는가** (기기 세션 1회):
-- `codex --help` 전문과 설치된 버전의 `config.toml` 문서를 받아 키 목록을 확정한다.
-- **일부러 틀린 값**(`sandbox_mode = "alr-bogus"`)을 넣고 Codex를 띄운다. 거부하면 파일이 읽히는 것이고, 아무 변화가 없으면 읽히지 않는 것이다. **유효한 값으로는 두 경우를 구분할 수 없다** — 이 프로젝트가 반복해 틀린 "양성 대조 없는 관측"이 정확히 그 형태다.
-- 읽히지 않는다면 쓸 자리는 Android 쪽 `$HOME/.codex/`이며, 그때 [05-provisioning-spec.md §5.2](05-provisioning-spec.md)와 `with_codex()`를 함께 고친다.
+**무엇이 이것을 끝내는가**: config 를 실제로 소비하는 codex 명령을 인증된 세션에서 한 번 돌리고, 잘못된 모드 값에 대해 에러를 내는지 본다. 또는 정적 바이너리라 `strace` 로 실제 open 경로를 보는 것(preload 로는 불가).
 
-**오늘 무엇이 막는가**: 기기 세션만 있으면 된다. 코드도 하네스도 아니다.
-
-**부수 보안 이슈 (더 커졌다)**: 샌드박스를 끄면 alr이 에이전트와 사용자 디바이스 사이의 유일한 방어선이 된다. **alr은 보안 경계가 아니다.** 게다가 R7에 따라 Codex는 경로 가상화조차 받지 않으므로 rootfs가 아니라 **Android 파일시스템**을 대상으로 동작한다. 설치 시 사용자에게 명시적으로 고지한다.
 
 ### ~~R14. preload SIGSEGV~~ — **근본 원인 확정 및 수정** ✅
 

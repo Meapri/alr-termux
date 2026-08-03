@@ -488,7 +488,18 @@ static int with_codex(const char *R, const char *cache)
                   "sandbox_mode = \"danger-full-access\"\n", f);
             fclose(f);
         }
-        printf("alr: NOTE codex sandbox disabled; alr is not a security boundary\n");
+        /* Do NOT claim the sandbox is off -- we do not know that it is.
+         * MEASURED (M18): breaking this file three ways (invalid TOML, deleted,
+         * bogus mode value) changes nothing about how codex starts.  That is
+         * not proof it is unread -- `codex --version` may not parse config at
+         * all -- but codex is a static musl binary that LD_PRELOAD cannot
+         * reach (M12 §8), so it resolves ~/.codex against ANDROID's root, and
+         * Android has no /root.  Saying "sandbox disabled" would assert more
+         * than the evidence supports. */
+        printf("alr: NOTE wrote %s/root/.codex/config.toml requesting a disabled\n"
+               "     sandbox. codex is statically linked, so alr cannot confirm it\n"
+               "     reads that file -- treat the guest as UNSANDBOXED either way.\n"
+               "     alr is not a security boundary.\n", R);
     }
     return 0;
 }
@@ -1163,7 +1174,8 @@ static void usage(void)
         "                                     provision a rootfs\n"
         "  run <cmd> [args...]                run one guest command\n"
         "  shell                              interactive guest shell\n"
-        "  version                            version and preload identity\n");
+        "  version                            version and preload identity\n"
+        "  doctor                             device capability report\n");
     exit(2);
 }
 
@@ -1207,6 +1219,34 @@ int main(int argc, char **argv)
         return cmd_run(distro, 0, NULL, 1);
     if (!strcmp(argv[i], "version") || !strcmp(argv[i], "--version"))
         return cmd_version();
+    if (!strcmp(argv[i], "doctor")) {
+        /* docs/06-cli-spec.md §3 lists `alr doctor`.  It is a separate binary
+         * because it must run BEFORE any rootfs exists and probes the host, not
+         * the guest -- but a user should not have to know that.  Exec the
+         * sibling next to g_self, which is where both land in the release
+         * layout (bin/alr, bin/alr-doctor). */
+        char p[ALR_PBUF], dir[ALR_PBUF], *slash;
+        snprintf(dir, sizeof dir, "%s", g_self);
+        slash = strrchr(dir, '/');
+        if (slash) *slash = '\0'; else snprintf(dir, sizeof dir, ".");
+        snprintf(p, sizeof p, "%s/alr-doctor", dir);
+        if (access(p, X_OK) != 0) {
+            fprintf(stderr,
+                "alr: alr-doctor not found next to %s\n"
+                "  reason=doctor-missing\n"
+                "  The release tarball ships bin/alr and bin/alr-doctor together;\n"
+                "  install both, or run scripts/dev-push.sh doctor when developing.\n",
+                g_self);
+            return 125;
+        }
+        { char *av[8]; int k = 0, j;
+          av[k++] = p;
+          for (j = i + 1; j < argc && k < 7; j++) av[k++] = argv[j];
+          av[k] = NULL;
+          execv(p, av);
+          fprintf(stderr, "alr: cannot exec %s: %s\n", p, strerror(errno));
+          return 125; }
+    }
 
     usage();
     return 2;
