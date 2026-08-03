@@ -91,8 +91,7 @@ adb shell pm path com.termux    # 비어 있으면 아직 미설치
 Termux를 한 번 실행해 부트스트랩이 풀리기를 기다린 뒤, 릴리스 tarball을 `$PREFIX`에 푼다.
 
 ```bash
-# Termux 안에서. 릴리스가 비공개인 동안에는 `gh release download` 를 쓰거나
-# 브라우저에서 받아 $PREFIX 에 풀면 된다.
+# Termux 안에서. 인증 없이 그대로 동작한다 (익명 curl 로 검증).
 pkg install -y curl tar
 V=0.1.0        # src/common/alr_version.h 의 ALR_VERSION 과 같아야 한다
 curl -fsSLO https://github.com/Meapri/alr-termux/releases/download/v$V/alr-$V-aarch64.tar.gz
