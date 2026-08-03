@@ -38,10 +38,13 @@ M0 스캐폴딩
 > - **M8 성능은 실측 완료.** `git status`(10k 파일) native 42 / alr 49 / proot-distro **1,704 ms** → **34.8×**,
 >   기동 native 24 / alr 28 / proot **304 ms** → **10.9×**. 경로 계층 자체는 호출 9,912회 중 **재작성 26회,
 >   합계 ≈ 40 µs** ([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)). `path_traps=0 syscall_stops=0` 유지.
->   **남은 것은 셋이다**: auditallow 볼륨(R6), 그리고 하네스가 없어 아직 `PENDING_DEVICE` 인
->   `ALR BENCH NODE COLD vs PROOT` · `ALR BENCH EXEC THROUGHPUT` 두 줄
->   ([07-acceptance.md §2 M8](07-acceptance.md)). 즉 **M8 의 Exit 은 아직 충족되지 않았다** — 히어로 벤치
->   숫자가 나왔다는 것과 마일스톤이 끝났다는 것은 다르다. 사유는 아래 §M8.
+>   **하네스를 만들어 두 줄을 마저 실측했다** ([M17](evidence/2026-08-03-m17-bench-ab.md)):
+>   `ALR BENCH NODE COLD vs PROOT` **6.60×**(alr 55 / proot 363 ms, 동일 node 바이너리),
+>   `ALR BENCH EXEC THROUGHPUT` **351 exec/s**(proot 135). 막고 있던 것은 기기가 아니라
+>   `alr bench` 부재였고, 문서가 그렇게 적어 두고 있었다.
+>   **남은 것은 auditallow 볼륨(R6) 하나**이며 그것은 앱 프로세스에서 측정 자체가 불가능하다
+>   ([M16 §2](evidence/2026-08-03-m16-ipc-audit.md) — 외부 adb 관찰자가 필요하다).
+>   `bench/regression_gate.py` 도 아직 없으므로 **M8 의 산출물은 여전히 미완이다.**
 > - **ioctl §11 은 전제가 반증된 채로 끝났다.** PTY ioctl 인구조사 실측: `TCGETS` `TCSETS` `TIOCGWINSZ`
 >   `TIOCSWINSZ` **`FIONREAD`** `TIOCOUTQ` 는 그냥 허용된다 — §11 이 "가장 중요" 로 꼽아 에뮬레이션을
 >   요구했던 `FIONREAD` 가 필요 없었다. 거부되던 `TCGETS2` `TIOCGSID` `TIOCGETD` `TIOCEXCL` 은 번역했고

@@ -218,8 +218,8 @@ ALR PTY TMUX:                     PENDING_DEVICE  ← `tmux -V`만 PASS. 대화�
 ALR BENCH GIT STATUS vs PROOT:    34.8x  MEASURED  native 42 / alr 49 / proot 1,704 ms
 ALR BENCH NPM CI vs PROOT:        3.12x  MEASURED  alr 2.00 / proot 6.24~6.87 s (105 패키지)
 ALR BENCH PROC STARTUP vs PROOT:  10.9x  MEASURED  /bin/true: native 24 / alr 28 / proot 304 ms
-ALR BENCH NODE COLD vs PROOT:     PENDING_DEVICE
-ALR BENCH EXEC THROUGHPUT:        PENDING_DEVICE
+ALR BENCH NODE COLD vs PROOT:     6.60x  MEASURED  alr 55 / proot 363 ms (동일 node 바이너리)
+ALR BENCH EXEC THROUGHPUT:        351 exec/s  MEASURED  alr 351 / proot 135 exec/s
 ALR MEDIATION INVARIANT:          PASS   path_traps=0 syscall_stops=0  MEASURED
 ```
 
@@ -254,16 +254,28 @@ ALR MEDIATION INVARIANT:          PASS   path_traps=0 syscall_stops=0  MEASURED
 
 `bench/regression_gate.py`. CI와 온디바이스 스위트가 모두 실행한다.
 
-> ⚠️ **2026-08-03 현재 `bench/regression_gate.py`는 존재하지 않는다** — `bench/`에는
-> `microbench/rw_cost.c`와 `notif_cost.c`뿐이다. 지금 이 불변식들을 실제로 지키는 것은 흩어져 있다:
-> `path_traps`/`syscall_stops`는 디바이스 스위트의 `SUPERVISOR NO SYSCALL STOPS`가 매 실행 두 값을
-> 함께 확인하고(`sigsys_per_process`는 `SUPERVISOR SIGSYS PER RUN`), `rw_*_ns`는 **손으로 돌리는**
-> `bench/microbench/rw_cost.c`(`scripts/dev-push.sh`의 별도 타깃 — 스위트가 자동으로 돌리지 않는다),
-> `glibc_verneed_max`는 `scripts/check-preload.sh`의 `PRELOAD GLIBC VERNEED FLOOR`와
-> `scripts/make-release.sh`가 본다.
-> **`preload.malloc_calls == 0`을 검사하는 것은 아무것도 없다** (M4 주석 참조). 소프트 게이트의
-> "이전 최고 대비 +10%"도 이전 값을 보관하는 곳이 없어 실행되지 않는다. 이 절은 **명세이지 현재
-> 상태가 아니다.**
+> **`bench/regression_gate.py` 는 이제 존재한다** ([M17](evidence/2026-08-03-m17-bench-ab.md)).
+> 설계상 **아무것도 재지 않는다** — 런타임 불변식은 실제 앱 프로세스(`uid>=10000 ∧ Seccomp==2`)에서만
+> 나올 수 있고 호스티드 러너는 그것이 아니다. 그래서 기기 하네스가 사실을 내고 게이트는 그것을 **소비**한다:
+>
+> ```
+> ./scripts/dev-push.sh accept   | tee accept.txt
+> ./scripts/dev-push.sh bench-ab | tee bench.txt
+> ./scripts/dev-push.sh bench    | tee rw.txt
+> bench/regression_gate.py --from accept.txt bench.txt rw.txt
+> bench/regression_gate.py --build-only        # CI, 기기 출력 없이 아티팩트 불변식만
+> ```
+>
+> **없는 사실은 PASS 가 아니다** — 인자 없이 부르면 거부하고, 기대한 값이 출력에 없으면 `ABSENT` 로
+> 세어 FAIL 시킨다. 빈 파일에 대해 green 을 내는 게이트는 게이트가 아니다. 실제로 이 규칙이 첫
+> 실행에서 `rw_*_ns` 패턴 불일치를 잡았다.
+>
+> **`preload.malloc_calls == 0` 은 여전히 아무것도 검사하지 않는다.** 게이트가 그것을 `UNENFORCED` 로
+> **매 실행 출력한다** — 문서 각주에만 있으면 잊히기 때문이다. R1 은 현재 코드 규약과 리뷰로만 지켜지며
+> `getaddrinfo` 계열은 문서화된 예외다.
+>
+> 소프트 게이트는 `bench/baseline.json` 을 쓴다. `--update` 로만 갱신되고 암묵적으로 쓰이지 않는다 —
+> 스스로 골대를 옮기는 게이트는 게이트가 아니다.
 
 **하드 불변식 — 어기면 즉시 실패:**
 ```

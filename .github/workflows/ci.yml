@@ -143,6 +143,15 @@ jobs:
       - name: scripts/check-preload.sh
         run: scripts/check-preload.sh
 
+      # check-preload.sh builds into scratch dirs, so give the gate a build/ to
+      # read.  Artifact invariants only: everything runtime lives behind a
+      # device gate no hosted runner can satisfy, and the gate refuses rather
+      # than reporting green on facts it never saw.
+      - name: regression gate (build-side invariants)
+        run: |
+          scripts/build-preload.sh
+          python3 bench/regression_gate.py --build-only
+
   # ── host-ABI cross-build ───────────────────────────────────────────────────
   # ┌───────────────────────────────────────────────────────────────────────┐
   # │ VERIFIED 2026-08-03, run 30757467197: this job passes.                │

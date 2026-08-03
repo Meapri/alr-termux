@@ -81,6 +81,15 @@ bench)
         clang -O2 -Wall -Isrc/common -o rw_cost bench/microbench/rw_cost.c && \
         ./rw_cost"
     ;;
+bench-ab)
+    assert_context
+    sync_tree
+    "${SSH[@]}" "cd ~/$REMOTE && \
+        clang $CFLAGS_DEV -Isrc/common -Isrc/supervisor -o alr \
+              src/cli/alr.c src/cli/alr_resolvd.c src/common/alr_exec_rule.c src/common/alr_elf.c src/supervisor/alr_supervisor.c && \
+        chmod +x tests/device/bench.sh && \
+        ${ALR_DISTROS_DIR:+ALR_ROOT_DIR=\$HOME/$ALR_DISTROS_DIR }ALR=./alr tests/device/bench.sh"
+    ;;
 breadth)
     assert_context
     sync_tree
