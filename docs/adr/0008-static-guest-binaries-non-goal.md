@@ -26,7 +26,25 @@ Accepted (2026-08-03).
 > | `alr run codex --version` | `WARNING: ... could not create PATH aliases: Read-only file system` |
 > | `alr run -e HOME=$HOME/codexhome codex --version` | **경고 없음**, `.codex` 정상 생성 |
 >
-> codex 는 경로를 **Android 기준**으로 푼다. 기본 `HOME=/root` 는 Android 에 없으므로 실패하고, **Android 에서 보이는 경로**를 주면 정상 동작한다. 즉 게스트 rootfs 안의 프로젝트에는 쓸 수 없지만, **Termux 홈의 프로젝트에는 쓸 수 있다.** 이것이 [RISKS R8](../RISKS.md) 도 함께 답했다 — `alr` 이 rootfs 안에 쓰던 config 는 codex 가 **볼 수 없는 위치**였다.
+> codex 는 경로를 **Android 기준**으로 푼다. 기본 `HOME=/root` 는 Android 에 없으므로 실패하고, **Android 에서 보이는 경로**를 주면 정상 동작한다. 이것이 [RISKS R8](../RISKS.md) 도 함께 답했다 — `alr` 이 rootfs 안에 쓰던 config 는 codex 가 **볼 수 없는 위치**였다.
+>
+> **그런데 더 정확한 결론이 있다: codex 는 게스트 프로그램이 아니다.** 같은 바이너리를 **alr 없이 Termux 에서 직접** 돌리면 출력이 동일하다(실측). 즉 `alr run codex` 는 아무것도 더해 주지 않는다 — 경로 가상화가 안 붙으니 당연하다.
+>
+> 실제로 부딪히는 것:
+>
+> | | codex 가 보는 것 |
+> |---|---|
+> | `/bin/sh`, `/bin/ls` | **있음** (Android toybox) |
+> | `/bin/bash`, `/usr/bin/env` | **없음** |
+> | Ubuntu 게스트의 도구 전부 | **없음** |
+>
+> 즉 codex 가 스스로 돌리는 셸 명령은 Ubuntu 가 아니라 **Android 의 빈약한 도구 집합**을 만난다. 그래서 권장 사용법은 alr 을 거치는 것이 아니라 **Termux 경로를 주는 것**이다:
+>
+> ```bash
+> PATH=$PREFIX/bin:/system/bin <R>/usr/local/bin/codex
+> ```
+>
+> `--with codex` 는 남긴다 — 설치 편의는 여전히 있다. 다만 그것이 **게스트 안에서 돈다는 뜻은 아니다.**
 - 수용 시험의 `ALR CODEX LINKAGE` 는 `KNOWN_FAIL` 이 아니라 **관찰 라인**이다. `KNOWN_FAIL` 은 "원하는데 안 된다" 를 뜻하는데, 이제 원하지 않는다.
 
 ## Rationale

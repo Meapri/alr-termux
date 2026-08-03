@@ -508,17 +508,23 @@ static int with_codex(const char *R, const char *cache)
          * So the rootfs copy is written where codex will never look.  It is
          * kept because it costs nothing and documents intent, but the NOTE now
          * says plainly that it is not the file codex reads. */
-        printf("alr: NOTE codex is statically linked, so path virtualization does\n"
-               "     NOT apply to it -- it resolves paths against Android, not the\n"
-               "     guest (ADR 0008: codex is a non-goal).\n"
-               "     MEASURED: with the default HOME=/root it cannot even create\n"
-               "     ~/.codex, because Android has no /root.  The config written\n"
-               "     to %s/root/.codex/config.toml is therefore NOT the file codex\n"
-               "     reads.\n"
-               "     To actually run it, give it an Android-visible HOME:\n"
-               "         alr run -e HOME=$HOME/codexhome /usr/local/bin/codex\n"
-               "     Treat the guest as UNSANDBOXED either way -- alr is not a\n"
-               "     security boundary.\n", R);
+        printf(
+          "alr: NOTE codex is installed, but it is NOT a guest program.\n"
+          "     It is statically linked, so path virtualization cannot reach it\n"
+          "     (ADR 0008) -- it resolves every path against ANDROID, not the\n"
+          "     rootfs.  MEASURED: the binary produces identical output run\n"
+          "     directly from Termux with no alr involved, so `alr run codex`\n"
+          "     adds nothing.\n"
+          "     Consequences you will actually hit:\n"
+          "       - the config alr wrote to %s/root/.codex/config.toml is NOT\n"
+          "         the file codex reads; with HOME=/root it cannot even create\n"
+          "         ~/.codex, because Android has no /root\n"
+          "       - shell commands it spawns see Android's toybox: /bin/sh and\n"
+          "         /bin/ls exist, /bin/bash and /usr/bin/env do not\n"
+          "     Run it against Termux paths instead:\n"
+          "       PATH=$PREFIX/bin:/system/bin %s/usr/local/bin/codex\n"
+          "     Treat the guest as UNSANDBOXED regardless -- alr is not a\n"
+          "     security boundary.\n", R, R);
     }
     return 0;
 }
