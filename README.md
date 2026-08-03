@@ -4,7 +4,7 @@
 독립형 런타임 + CLI다. 목표 워크로드는 `git`, `node`/`npm`, `make`, `apt` 같은 평범한 Linux CLI 프로그램을
 폰의 CPU 성능 그대로 돌리는 것이다.
 
-> **선행 릴리스 (v0.4.1).** 참조 디바이스는 **2대 — MediaTek(커널 6.1)과 Snapdragon 8 Elite(커널 6.6),
+> **선행 릴리스 (v0.4.2).** 참조 디바이스는 **2대 — MediaTek(커널 6.1)과 Snapdragon 8 Elite(커널 6.6),
 > 둘 다 Android 16**. 두 기기의 zygote 차단 syscall **239개 집합이 완전히 동일하고**, 호환성 폭
 > 96/96 도 같다 ([M19](docs/evidence/2026-08-03-m19-snapdragon.md)). **SoC 벤더·커널 축은 닫혔다.**
 > 수용 시험 **153건 PASS / 0 FAIL**, 설치 게이트 18건, 디바이스 없이 도는 호스트 게이트 10종.

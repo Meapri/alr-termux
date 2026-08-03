@@ -27,6 +27,41 @@ TARGET=aarch64-linux-gnu.2.17
 OUT=${OUT:-build/libalr_preload.so}
 SRC="src/preload/alr_preload.c src/common/alr_elf.c"
 
+# ── keep one toolchain's artifacts out of another's cache ───────────────
+#
+# zig compiles compiler-rt and its libc stubs once and caches them in
+# $ZIG_GLOBAL_CACHE_DIR, shared by every zig on the machine.  Two different
+# zig 0.16.0 INSTALLS are not the same toolchain -- Homebrew's links against
+# Homebrew LLVM, the official tarball bundles its own -- and the second one to
+# run happily reuses the first one's objects.
+#
+# MEASURED 2026-08-04.  Same sources, same `zig version` output of 0.16.0:
+#   Homebrew zig                       e46688bd...   .comment: Homebrew clang 21.1.8
+#   official tarball, contaminated     6790d602...   .comment: Homebrew clang 21.1.8  (!)
+#   official tarball, clean cache      052e7410...   .comment: clang 21.1.0
+#   CI (official tarball, Linux)       052e7410...   -- byte-identical
+#
+# The middle line is the dangerous one: the OFFICIAL compiler produced a binary
+# stamped with the OTHER one's identity, because the pieces it linked came from
+# the shared cache.  So the version pin above was never enough on its own, and
+# the reproducibility gate could not see it -- it gives both of its builds
+# their own cache directories, so they agreed with each other while disagreeing
+# with every other machine.
+#
+# Keying the cache on the interpreter's own path and version keeps the speedup
+# (compiler-rt is not rebuilt per invocation) while making the reuse impossible
+# across installs.  An explicit ZIG_*_CACHE_DIR from the caller still wins;
+# check-preload.sh sets both.
+if [ -z "${ZIG_GLOBAL_CACHE_DIR:-}" ] && [ -z "${ZIG_LOCAL_CACHE_DIR:-}" ]; then
+    _zig_real=$(cd "$(dirname "$ZIG")" 2>/dev/null && pwd -P)/$(basename "$ZIG")
+    _zig_id=$(printf '%s\n%s\n' "$_zig_real" "$("$ZIG" version 2>/dev/null)" \
+              | { command -v sha256sum >/dev/null 2>&1 && sha256sum || shasum -a 256; } \
+              | cut -c1-16)
+    ZIG_GLOBAL_CACHE_DIR="${TMPDIR:-/tmp}/alr-zig-cache-$_zig_id/global"
+    ZIG_LOCAL_CACHE_DIR="${TMPDIR:-/tmp}/alr-zig-cache-$_zig_id/local"
+    export ZIG_GLOBAL_CACHE_DIR ZIG_LOCAL_CACHE_DIR
+fi
+
 have=$("$ZIG" version)
 if [ "$have" != "$ZIG_REQ" ]; then
     echo "zig $ZIG_REQ required, found $have." >&2
@@ -116,9 +151,20 @@ srcsha=$(printf '%s\n' "$SRC_ALL" | LC_ALL=C sort | while read -r f; do
              [ -n "$f" ] || continue
              _sha "$f"
          done | _sha_stdin)
+# The compiler's own identity, read back out of the .so's .comment section.
+#
+# "zig_version": "0.16.0" is NOT enough to identify a toolchain: Homebrew's zig
+# links against Homebrew LLVM and the official tarball bundles its own, and
+# both answer 0.16.0.  They produce different bytes -- correctly, they are
+# different compilers -- and without this field a hash mismatch between two
+# machines has no explanation attached to it.
+cc_id=$(strings "$OUT" 2>/dev/null | grep -m1 -i "clang version" || true)
+: "${cc_id:=unknown}"
+
 cat > "${OUT%.so}.manifest.json" <<EOF
 {
   "zig_version": "$have",
+  "cc_identity": "$cc_id",
   "target": "$TARGET",
   "sources": "$SRC",
   "source_sha256": "$srcsha",

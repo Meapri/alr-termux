@@ -6,6 +6,6 @@
 #ifndef ALR_VERSION_H
 #define ALR_VERSION_H
 
-#define ALR_VERSION "0.4.1"
+#define ALR_VERSION "0.4.2"
 
 #endif /* ALR_VERSION_H */

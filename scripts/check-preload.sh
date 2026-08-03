@@ -206,7 +206,14 @@ h1=$(sha256 "$SO")
 if build_elsewhere 2; then
     h2=$(sha256 "$TMP/2/libalr_preload.so")
     if [ "$h1" = "$h2" ]; then
-        emit "PRELOAD REPRODUCIBLE" PASS "sha256=$h1 (rebuilt from another path)"
+        # Print the compiler identity beside the hash.  The two belong
+        # together: "zig 0.16.0" names two different toolchains (Homebrew's
+        # links Homebrew LLVM, the official tarball bundles its own) that
+        # legitimately produce different bytes, and a hash quoted without it
+        # cannot be matched against anyone else's.
+        cc=$(strings "$SO" 2>/dev/null | grep -m1 -i "clang version" || true)
+        emit "PRELOAD REPRODUCIBLE" PASS "sha256=$h1"
+        echo "    another path: same bytes.   cc: ${cc:-unknown}"
     else
         emit "PRELOAD REPRODUCIBLE" FAIL "build1=$h1 build2=$h2"
         echo "    The second build ran from a different directory, so a"

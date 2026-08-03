@@ -21,6 +21,25 @@ zig cc --target=aarch64-linux-gnu.2.17 \
 - 산출물 옆에 `manifest.json`: `{zig_version, target, source_sha256, output_sha256}`.
 - **CI 게이트**: `readelf -V libalr_preload.so`의 `DT_VERNEED`에 GLIBC_2.17 초과 버전이 없어야 한다.
 
+
+> **재현 가능 빌드의 정확한 범위** — `MEASURED` 2026-08-04.
+> `alr version` 이 찍는 sha256 이 값을 가지려면 **다른 사람이 같은 태그에서 같은 바이트를 다시 만들 수 있어야** 한다. 그게 성립하는 조건은 두 가지고, 둘 다 실측으로 확인했다.
+>
+> | 빌드 | sha256 | `.comment` |
+> |---|---|---|
+> | Homebrew zig (macOS) | `e46688bd…` | Homebrew clang 21.1.8 |
+> | 공식 tarball, **오염된 캐시** | `6790d602…` | **Homebrew clang 21.1.8** (!) |
+> | 공식 tarball, 깨끗한 캐시 (macOS) | `052e7410…` | clang 21.1.0 |
+> | CI (공식 tarball, Linux) | `052e7410…` | clang 21.1.0 |
+>
+> **(1) `zig version` 핀만으로는 부족하다.** `0.16.0` 이라고 답하는 설치가 둘 이상이다 — Homebrew 것은 Homebrew LLVM 에 링크하고 공식 tarball 은 자기 것을 번들한다. 서로 다른 컴파일러니 서로 다른 바이트가 나오는 게 **맞다**. 그래서 매니페스트가 `cc_identity` 를 함께 기록한다. 컴파일러 정체 없이 인용된 해시는 남의 것과 맞춰 볼 수가 없다.
+>
+> **(2) zig 전역 캐시가 툴체인 사이에 샜다.** 위 표의 두 번째 줄이 위험한 줄이다 — **공식 컴파일러가 만든 바이너리에 다른 컴파일러의 정체가 찍혔다.** zig 는 compiler-rt 와 libc 스텁을 `$ZIG_GLOBAL_CACHE_DIR` 에 한 번 만들어 두고 기계 위의 모든 zig 가 공유하는데, 나중에 도는 쪽이 앞선 쪽의 오브젝트를 그대로 재사용한다. `build-preload.sh` 는 이제 캐시 디렉토리를 **zig 실행파일의 실제 경로 + 버전**으로 키를 잡는다 — compiler-rt 를 매번 다시 만들지 않으면서(속도 유지) 설치 간 재사용은 불가능하게.
+>
+> **게이트는 이걸 볼 수 없었다.** `PRELOAD REPRODUCIBLE` 은 자기 두 빌드에 각각 캐시를 주므로, 둘은 서로 일치하면서 **다른 모든 기계와 불일치**할 수 있었다. 그리고 두 번째 빌드가 **출력 경로만** 달랐어서 결정성만 증명하고 있었다. 이제 다른 이름의 디렉토리로 소스를 복사해 거기서 빌드한다.
+>
+> 이 표는 v0.4.0 을 **자기가 발행한 tarball 로 설치해 보다가** 나왔다. `alr version` 이 릴리스된 `.so` 와 여기서 빌드한 것 사이의 MISMATCH 를 정확히 잡아냈고, 그 기능이 아니었으면 아무도 몰랐다.
+
 ## 2. 절대 규칙
 
 ```
