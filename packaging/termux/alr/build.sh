@@ -33,19 +33,19 @@
 # glibc ELF and produce something that fails to load only on the user's phone.
 # ─────────────────────────────────────────────────────────────────────────────
 
-TERMUX_PKG_HOMEPAGE=https://PLACEHOLDER.invalid/alr-termux
+TERMUX_PKG_HOMEPAGE=https://github.com/Meapri/alr-termux
 TERMUX_PKG_DESCRIPTION="Run stock Ubuntu 24.04 arm64 glibc programs in Termux without root"
 TERMUX_PKG_LICENSE="MIT"
 TERMUX_PKG_LICENSE_FILE="LICENSE"
-TERMUX_PKG_MAINTAINER="@PLACEHOLDER"
+TERMUX_PKG_MAINTAINER="@Meapri"
 
 # Keep in lockstep with src/common/alr_version.h -- that header is the single
 # source of truth and scripts/make-release.sh REFUSES to cut a release when this
 # line disagrees with it.
 TERMUX_PKG_VERSION="0.1.0"
 
-TERMUX_PKG_SRCURL=https://PLACEHOLDER.invalid/alr-termux/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz
-TERMUX_PKG_SHA256=PLACEHOLDER_sha256_of_the_source_tarball
+TERMUX_PKG_SRCURL=https://github.com/Meapri/alr-termux/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz
+TERMUX_PKG_SHA256=fdd606e17d15ad69d7360ee8a98fa0a28202d891afcc046c0ad6f1f498d282ae
 
 # Runtime dependencies, derived from what src/cli/alr.c actually execs or pipes
 # through popen() ON THE HOST.  These are not guesses:
@@ -87,8 +87,8 @@ TERMUX_PKG_NO_ELF_CLEANER=true
 # those were linked by the release NDK, and a termux package must build its own
 # host binaries so the API level and hardening flags match the rest of the
 # repository rather than whatever the release machine happened to have.
-_PRELOAD_TARBALL_URL="https://PLACEHOLDER.invalid/alr-termux/releases/download/v${TERMUX_PKG_VERSION}/alr-${TERMUX_PKG_VERSION}-aarch64.tar.gz"
-_PRELOAD_TARBALL_SHA256="PLACEHOLDER_sha256_of_alr-${TERMUX_PKG_VERSION}-aarch64.tar.gz"
+_PRELOAD_TARBALL_URL="https://github.com/Meapri/alr-termux/releases/download/v${TERMUX_PKG_VERSION}/alr-${TERMUX_PKG_VERSION}-aarch64.tar.gz"
+_PRELOAD_TARBALL_SHA256="2e3aaf8759a472a5617369ca8bd10f502732b5d0e021c35e4bcb0096b2a8c663"
 
 # Fail at the top rather than 200 lines into a build with a confusing 404.
 _alr_refuse_placeholders() {
