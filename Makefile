@@ -156,6 +156,7 @@ check-zig:
 check: test
 	@ZIG=$(ZIG) bash scripts/check-preload.sh
 	@bash scripts/check-docs.sh
+	@bench/regression_gate.py --self-test
 
 # --- release layout --------------------------------------------------------
 # The same bin/ and share/ that alr-<version>-aarch64.tar.gz carries at its top

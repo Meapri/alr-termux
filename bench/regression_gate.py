@@ -64,6 +64,8 @@ SOFT = [
     ("exec_per_sec", None),      # higher is better; handled separately
 ]
 
+DEVICE_PAT = r"ALR BENCH DEVICE:\s*(\S+)"
+
 PAT = {
     "supervisor.syscall_stops": r"syscall_stops=(\d+)",
     "supervisor.path_traps": r"path_traps=(\d+)",
@@ -73,7 +75,14 @@ PAT = {
     # ABSENT rather than passing on facts it never saw.
     "preload.rw_abs_ns": r"PRELOAD RW ABS COST\s+([\d.]+)\s*ns",
     "preload.rw_rel_ns": r"PRELOAD RW REL COST\s+([\d.]+)\s*ns",
-    "node_cold_ms": r"ALR BENCH NODE COLD vs PROOT:.*?alr\s+(\d+)\s*/",
+    # `[^\n]*?`, NOT `.*?` under re.S.  The dot-all version was allowed to run
+    # off the end of the NODE COLD line and keep looking; when the harness
+    # started printing a spread ("alr 56 [51-60] / proot ..."), the anchor no
+    # longer matched on its own line, the search crossed into EXEC THROUGHPUT,
+    # and node_cold_ms silently picked up the exec figure -- 683 "ms" -- which
+    # --update then wrote into the baseline as fact.  A scraper must not be
+    # able to answer a question using a different line's number.
+    "node_cold_ms": r"ALR BENCH NODE COLD vs PROOT:[^\n]*?alr\s+(\d+)\s",
     "exec_per_sec": r"ALR BENCH EXEC THROUGHPUT:\s*(\d+)\s*exec/s",
 }
 
@@ -88,6 +97,9 @@ def scrape(paths):
         except OSError as e:
             die("cannot read %s: %s" % (p, e))
     out = {}
+    dev = re.findall(DEVICE_PAT, blob)
+    if dev:
+        out["_device"] = dev[-1]
     for key, pat in PAT.items():
         hits = re.findall(pat, blob, re.S)
         if not hits:
@@ -126,6 +138,61 @@ def die(msg):
     sys.exit(2)
 
 
+# A canned harness transcript with known answers.  This exists because the
+# scraper once matched the EXEC THROUGHPUT number for node_cold_ms and --update
+# wrote it to the baseline; nothing caught it, because a regex that matches the
+# wrong thing looks exactly like a regex that works.  The sample deliberately
+# includes the spread brackets and puts a decoy number on every line.
+SELFTEST_SAMPLE = """\
+── alr bench (A/B) ──────────────────────────────────────────
+ALR BENCH DEVICE: TEST-1/plat/android16/6.6
+  reps=5  guest=/x/ubuntu-24.04
+
+ALR BENCH NODE COLD vs PROOT:      5.25x  MEASURED  alr 56 [51-60] / proot 294 [290-301] ms  (identical node binary)
+ALR BENCH EXEC THROUGHPUT:         683 exec/s  MEASURED  alr 683 / proot 219 exec/s  (alr 293 ms [290-297] over 200 execs)
+ALR MEDIATION INVARIANT:           PASS  path_traps=0 syscall_stops=0  MEASURED
+    PRELOAD RW ABS COST          79.2 ns  <=  100  PASS
+    PRELOAD RW REL COST           6.1 ns  <=   20  PASS
+"""
+
+SELFTEST_EXPECT = {
+    "_device": "TEST-1/plat/android16/6.6",
+    "supervisor.syscall_stops": 0,
+    "supervisor.path_traps": 0,
+    "preload.rw_abs_ns": 79.2,
+    "preload.rw_rel_ns": 6.1,
+    "node_cold_ms": 56.0,          # NOT 683, NOT 294
+    "exec_per_sec": 683,
+}
+
+
+def self_test():
+    import tempfile
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
+                                     encoding="utf-8") as f:
+        f.write(SELFTEST_SAMPLE)
+        path = f.name
+    try:
+        got = scrape([path])
+    finally:
+        os.unlink(path)
+
+    print("── regression gate self-test ────────────────────────────────")
+    bad = 0
+    for key, want in SELFTEST_EXPECT.items():
+        have = got.get(key, "<absent>")
+        ok = have == want
+        print("  %-28s %s  got %r want %r" % (key, "ok  " if ok else "FAIL", have, want))
+        bad += 0 if ok else 1
+    extra = set(got) - set(SELFTEST_EXPECT)
+    if extra:
+        print("  unexpected keys scraped: %s" % sorted(extra))
+        bad += 1
+    print("────────────────────────────────────────────────────────────")
+    print("ALR GATE SELF-TEST: %s" % ("FAIL" if bad else "PASS"))
+    return 1 if bad else 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -135,7 +202,12 @@ def main():
                     help="check artifact invariants only (CI, no device)")
     ap.add_argument("--update", action="store_true",
                     help="rewrite bench/baseline.json from these facts")
+    ap.add_argument("--self-test", action="store_true",
+                    help="check the scraper against a canned transcript (no device)")
     args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
 
     facts, notes = build_facts()
     if not args.build_only:
@@ -183,13 +255,36 @@ def main():
     for key, desc, why in UNENFORCED:
         print("  %-28s UNENFORCED  %s" % (key, why))
 
+    # Soft baselines are PER DEVICE.  Timing numbers from one phone are not a
+    # yardstick for another: the two reference devices differ by ~7% on node
+    # cold start running byte-identical code, which is large enough to both
+    # mask a real regression and manufacture a fake one.
+    device = facts.get("_device")
+    devices = baseline.get("devices", {})
+    if device is None:
+        if any(k in facts for k, _ in SOFT):
+            print("  %-28s NOTE    harness emitted no 'ALR BENCH DEVICE:' line;"
+                  % "soft baselines")
+            print("        soft comparisons skipped rather than run against "
+                  "another device's numbers")
+        dev_baseline = None
+    else:
+        print("  %-28s %s" % ("device", device))
+        dev_baseline = devices.get(device)
+        if dev_baseline is None:
+            print("  %-28s NEW     no baseline recorded for this device"
+                  % "soft baselines")
+            dev_baseline = {}
+
     for key, tol in SOFT:
         if key not in facts:
             continue
-        prev = baseline.get(key)
+        if dev_baseline is None:
+            continue
+        prev = dev_baseline.get(key)
         v = facts[key]
         if prev is None:
-            print("  %-28s BASELINE  %s (no previous value)" % (key, v))
+            print("  %-28s BASELINE  %s (no previous value for this device)" % (key, v))
             continue
         if tol is None:                       # higher is better
             if v < prev * 0.90:
@@ -204,11 +299,17 @@ def main():
             print("  %-28s ok      %s (prev %s)" % (key, v, prev))
 
     if args.update:
+        if device is None:
+            die("--update needs a device identity. Run tests/device/bench.sh so "
+                "the output carries an 'ALR BENCH DEVICE:' line; a baseline "
+                "with no device attached is what this gate was fixed to stop.")
         keep = {k: facts[k] for k, _ in SOFT if k in facts}
+        devices[device] = {**devices.get(device, {}), **keep}
+        baseline["devices"] = devices
         with open(BASELINE, "w", encoding="utf-8") as f:
-            json.dump(keep, f, indent=2, sort_keys=True)
+            json.dump(baseline, f, indent=2, sort_keys=True)
             f.write("\n")
-        print("  baseline written: %s" % BASELINE)
+        print("  baseline written for %s: %s" % (device, BASELINE))
 
     print("────────────────────────────────────────────────────────────")
     print("  hard checked=%d failed=%d   soft warnings=%d" % (checked, failed, warned))

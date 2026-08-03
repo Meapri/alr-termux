@@ -62,20 +62,43 @@ if command -v proot-distro >/dev/null 2>&1 && [ -d "$PROOT_RFS" ]; then have_pro
 # An earlier version used it and every measurement came back empty.
 now_ms() { printf '%s' "$(( ${EPOCHREALTIME/./} / 1000 ))"; }
 
+# One discarded warm-up run, then REPS timed ones.
+#
+# WHY THE WARM-UP IS NOT OPTIONAL: run immediately after the breadth suite
+# (96 package installs) this harness reported 330 exec/s and 61 ms node cold.
+# Three runs later on the same phone, same binaries, it reported 687 / 52 --
+# the first number was off by 2x.  It was measuring a thermally throttled,
+# cache-cold device, and a median of five does not help when all five are in
+# that state.  MEASURE AN IDLE PHONE, and let the spread show when it is not.
+#
+# Prints "<median> <min>-<max>" on one line.  It does NOT set a global: callers
+# use it as $(median_ms ...), which is a subshell, so an assignment inside would
+# never reach the caller.  An earlier version tried exactly that and every
+# spread printed as an empty "[]" -- visible only because the placeholder was
+# printed rather than silently omitted.
 median_ms() {
-    local i t0 t1 v
-    v=$(for i in $(seq 1 "$REPS"); do
+    local i t0 t1 all
+    "$@" >/dev/null 2>&1                      # warm-up, discarded
+    all=$(for i in $(seq 1 "$REPS"); do
             t0=$(now_ms)
             "$@" >/dev/null 2>&1
             t1=$(now_ms)
             echo $((t1 - t0))
-        done | sort -n | awk '{a[NR]=$1} END{if(NR)print a[int((NR+1)/2)]}')
-    printf '%s' "${v:-}"
+        done | sort -n)
+    printf '%s\n' "$all" | awk '{a[NR]=$1} END{ if(NR) printf "%d %d-%d", a[int((NR+1)/2)], a[1], a[NR] }'
 }
 
 ratio() { awk -v a="$1" -v b="$2" 'BEGIN{ if (b>0 && a>0) printf "%.2f", a/b; else printf "?" }'; }
 
+# Machine-readable device identity.  bench/regression_gate.py keys its soft
+# baselines on this: comparing this phone's node cold start against another
+# phone's recorded value is not a regression check, it is a device difference
+# wearing one.  The two reference devices differ by ~7% on that number with
+# identical code.
+DEVICE_ID="$(getprop ro.product.model 2>/dev/null || echo unknown)/$(getprop ro.board.platform 2>/dev/null || echo unknown)/android$(getprop ro.build.version.release 2>/dev/null || echo '?')/$(uname -r | cut -d. -f1,2)"
+
 echo "── alr bench (A/B) ──────────────────────────────────────────"
+echo "ALR BENCH DEVICE: $DEVICE_ID"
 echo "  reps=$REPS  guest=$R"
 [ "$have_proot" = 1 ] && echo "  proot=$PROOT_RFS" || echo "  proot=(absent — A/B lines will be SKIP)"
 echo
@@ -102,14 +125,14 @@ NODE_G=/opt/node/bin/node
 if [ ! -x "$R$NODE_G" ]; then
     emit "ALR BENCH NODE COLD vs PROOT" SKIP "node not installed in the guest"
 elif [ "$have_proot" != 1 ] || [ ! -x "$PROOT_RFS$NODE_G" ]; then
-    a=$(median_ms "$ALR" run "$NODE_G" -e 0)
-    emit "ALR BENCH NODE COLD vs PROOT" SKIP "alr ${a:-?} ms; proot side has no identical node"
+    read -r a as <<<"$(median_ms "$ALR" run "$NODE_G" -e 0)"
+    emit "ALR BENCH NODE COLD vs PROOT" SKIP "alr ${a:-?} ms [${as:-?}]; proot side has no identical node"
 else
-    a=$(median_ms "$ALR" run "$NODE_G" -e 0)
-    p=$(median_ms proot-distro login ubuntu -- "$NODE_G" -e 0)
+    read -r a as <<<"$(median_ms "$ALR" run "$NODE_G" -e 0)"
+    read -r p ps <<<"$(median_ms proot-distro login ubuntu -- "$NODE_G" -e 0)"
     if [ -n "$a" ] && [ -n "$p" ]; then
         emit "ALR BENCH NODE COLD vs PROOT" "$(ratio "$p" "$a")x" \
-             "MEASURED  alr $a / proot $p ms  (identical node binary)"
+             "MEASURED  alr $a [$as] / proot $p [$ps] ms  (identical node binary)"
     else
         emit "ALR BENCH NODE COLD vs PROOT" FAIL "timing failed (alr='${a:-}' proot='${p:-}')"
     fi
@@ -122,9 +145,9 @@ fi
 if [ "${probe_ok:-0}" = 1 ]; then
     N=${EXEC_N:-200}
     loop='i=0; while [ $i -lt '"$N"' ]; do /tmp/alrexec; i=$((i+1)); done'
-    a=$(median_ms "$ALR" run /bin/sh -c "$loop")
+    read -r a as <<<"$(median_ms "$ALR" run /bin/sh -c "$loop")"
     if [ "$have_proot" = 1 ] && [ -x "$PROOT_RFS/tmp/alrexec" ]; then
-        p=$(median_ms proot-distro login ubuntu -- /bin/sh -c "$loop")
+        read -r p ps <<<"$(median_ms proot-distro login ubuntu -- /bin/sh -c "$loop")"
     else
         p=""
     fi
@@ -133,7 +156,7 @@ if [ "${probe_ok:-0}" = 1 ]; then
         if [ -n "$p" ] && [ "$p" -gt 0 ] 2>/dev/null; then
             pps=$(awk -v n="$N" -v ms="$p" 'BEGIN{printf "%.0f", n/(ms/1000)}')
             emit "ALR BENCH EXEC THROUGHPUT" "${aps} exec/s" \
-                 "MEASURED  alr ${aps} / proot ${pps} exec/s  ($(ratio "$a" "$p")x proot's time)"
+                 "MEASURED  alr ${aps} / proot ${pps} exec/s  (alr ${a} ms [$as] over $N execs)"
         else
             emit "ALR BENCH EXEC THROUGHPUT" "${aps} exec/s" \
                  "MEASURED  alr only; no proot side"

@@ -85,6 +85,13 @@ jobs:
       - name: doc link gate
         run: make check-docs
 
+      # The scraper once answered node_cold_ms with the exec-throughput number
+      # from the next line, and --update wrote it into the baseline as fact.  A
+      # regex that matches the wrong thing looks exactly like one that works,
+      # so it gets a canned transcript with known answers.
+      - name: regression gate self-test
+        run: bench/regression_gate.py --self-test
+
   # ── guest-side interposer ──────────────────────────────────────────────────
   # zig is pinned to the exact patch version on purpose: reproducibility only
   # holds under an exact pin, because a zig upgrade changes bundled compiler-rt
