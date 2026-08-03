@@ -2435,7 +2435,28 @@ static int rb_connect(void)
     memset(&sa, 0, sizeof sa);
     sa.sun_family = AF_UNIX;
     memcpy(sa.sun_path, g_resolv_sock, n + 1);
-    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) { close(fd); return -1; }
+    /* real_connect, NOT our connect().
+     *
+     * g_resolv_sock is a HOST path -- alr_resolvd puts its socket under
+     * Termux's $TMPDIR, outside the rootfs by construction.  Our connect()
+     * rewrites absolute paths into the rootfs, so once bind/connect were
+     * interposed this address became <R>$PREFIX/tmp/... which does not exist,
+     * and every DNS lookup silently lost its bridge.
+     *
+     * MEASURED: `dig -v` aborted with "free(): invalid pointer" -- the failure
+     * did not even look like a name-resolution problem.  The acceptance suite
+     * could not see it: RESOLV HOSTS/AHOSTS/REVERSE all use the files backend
+     * and never open this socket, and RESOLV LEGACY DNS is SKIPped for want of
+     * a network.  It took the breadth sweep, which runs `dig -v`.
+     *
+     * The general rule this is an instance of: alr's OWN paths must never go
+     * through rw().  The guest cannot name them and has no business reaching
+     * them; only we do, and we already hold them in host form. */
+    if (!real_connect) real_connect = dlsym(RTLD_NEXT, "connect");
+    if (!real_connect) { close(fd); return -1; }
+    if (real_connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
+        close(fd); return -1;
+    }
     return fd;
 }
 
@@ -2545,6 +2566,41 @@ static int hosts_addrinfo(int af, const void *a4, const void *a6,
     return 0;
 }
 
+/* Deep-copy an addrinfo chain into the layout freeaddrinfo() below expects:
+ * every node, every ai_addr and every ai_canonname its own allocation. */
+static int ai_clone(const struct addrinfo *src, struct addrinfo **out)
+{
+    struct addrinfo *head = NULL, *tail = NULL;
+    *out = NULL;
+    for (; src; src = src->ai_next) {
+        struct addrinfo *n = calloc(1, sizeof *n);
+        if (!n) goto oom;
+        n->ai_flags = src->ai_flags;
+        n->ai_family = src->ai_family;
+        n->ai_socktype = src->ai_socktype;
+        n->ai_protocol = src->ai_protocol;
+        n->ai_addrlen = src->ai_addrlen;
+        if (src->ai_addr && src->ai_addrlen) {
+            if (!(n->ai_addr = malloc(src->ai_addrlen))) { free(n); goto oom; }
+            memcpy(n->ai_addr, src->ai_addr, src->ai_addrlen);
+        }
+        if (src->ai_canonname) {
+            size_t l = strlen(src->ai_canonname) + 1;
+            if (!(n->ai_canonname = malloc(l))) {
+                free(n->ai_addr); free(n); goto oom;
+            }
+            memcpy(n->ai_canonname, src->ai_canonname, l);
+        }
+        if (tail) tail->ai_next = n; else head = n;
+        tail = n;
+    }
+    *out = head;
+    return head ? 0 : EAI_NONAME;
+oom:
+    freeaddrinfo(head);
+    return EAI_MEMORY;
+}
+
 int getaddrinfo(const char *node, const char *service,
                 const struct addrinfo *hints, struct addrinfo **out)
 {
@@ -2571,12 +2627,37 @@ int getaddrinfo(const char *node, const char *service,
     if (fd < 0) {
         /* No bridge (older alr, or it failed to start): fall through to the
          * guest's own resolver, which is correct on devices without Private
-         * DNS or a VPN.  Failing hard here would break those too. */
+         * DNS or a VPN.  Failing hard here would break those too.
+         *
+         * THE RESULT MUST BE COPIED INTO OUR LAYOUT, not handed back as-is.
+         * glibc allocates the whole chain as ONE block -- ai_addr and
+         * ai_canonname point INSIDE the same allocation as ai -- while our
+         * freeaddrinfo() below frees the three separately, because that is how
+         * the bridge path allocates them.  Returning glibc's structure means
+         * the caller's freeaddrinfo() calls free() on an interior pointer.
+         *
+         * MEASURED: `dig -v` aborted with "free(): invalid pointer" whenever
+         * the bridge was unavailable.  Not a lookup failure, an abort -- and
+         * this is the documented, expected path for any device where alr's
+         * resolver daemon does not start, so it was one failed daemon away
+         * from crashing every name lookup in the guest.
+         *
+         * One allocator owns the layout.  Copying costs one pass over a
+         * handful of addresses on a path that already did a DNS round trip. */
         static int (*real_gai)(const char *, const char *,
                                const struct addrinfo *, struct addrinfo **);
+        static void (*real_fai)(struct addrinfo *);
+        struct addrinfo *g = NULL;
+        int rc;
+
         if (!real_gai) real_gai = dlsym(RTLD_NEXT, "getaddrinfo");
+        if (!real_fai) real_fai = dlsym(RTLD_NEXT, "freeaddrinfo");
         if (!real_gai) return EAI_FAIL;
-        return real_gai(node, service, hints, out);
+        rc = real_gai(node, service, hints, &g);
+        if (rc != 0) return rc;
+        rc = ai_clone(g, out);
+        if (real_fai) real_fai(g);
+        return rc;
     }
 
     nl = node ? strlen(node) : 0;

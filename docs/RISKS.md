@@ -71,6 +71,14 @@ Termux
 
 아래는 진단 기록이다. 해결: `src/cli/alr_resolvd.c`(Termux측 bionic 리졸버 스레드) + preload의 `getaddrinfo`/`freeaddrinfo` 인터포즈. 검증: `apt-get update`가 35.2 MB를 받고 완주.
 
+> ⚠️ **브리지에는 두 가지 함정이 있었고 둘 다 2026-08-04 에 고쳤다. 둘 다 `dig -v` 가 `free(): invalid pointer` 로 죽는 것으로 나타났다** — 이름 해석 문제처럼 보이지도 않는 증상이다.
+>
+> **(a) 브리지 소켓 주소가 재작성됐다.** `bind`/`connect` 인터포즈([§6.18](04-preload-spec.md))가 들어오자, preload 자신의 `rb_connect()` 가 부르는 `connect()` 도 우리 래퍼로 갔다. `ALR_RESOLV_SOCK` 은 Termux `$TMPDIR` 아래의 **호스트** 경로라 `rw()` 가 rootfs 안으로 접두사를 붙였고, 존재하지 않는 주소가 됐다. **일반화된 규칙: alr 자신의 경로는 절대 `rw()` 를 통과시키지 않는다.** 게스트는 그 경로를 이름 붙일 수도 없고 닿을 이유도 없다 — 우리만 쓰고, 우리는 이미 호스트 형식으로 들고 있다. 내부 호출자는 `real_*` 를 쓴다.
+>
+> **(b) 폴백 경로의 addrinfo 레이아웃이 우리 것이 아니었다.** 브리지가 없을 때(데몬이 안 뜬 기기, 구버전 alr) `getaddrinfo` 는 glibc 자체 리졸버로 폴백한다 — Private DNS 도 VPN 도 없는 기기에서는 그게 맞으므로 **지원되는 경로**다. 그런데 glibc 는 체인 전체를 **한 덩어리**로 할당해서 `ai_addr`·`ai_canonname` 이 같은 할당 **내부**를 가리키고, 우리 `freeaddrinfo()` 는 브리지 경로의 할당 방식대로 셋을 **따로** 해제한다. 그래서 호출자의 `freeaddrinfo()` 가 내부 포인터를 `free()` 했다. **데몬이 한 번 안 뜨면 게스트의 모든 이름 조회가 죽는 거리였다.** 이제 폴백 결과를 우리 레이아웃으로 깊은 복사하고 원본은 `real_freeaddrinfo` 로 해제한다 — **레이아웃의 주인은 하나다.**
+>
+> **수용 시험이 왜 못 봤나**: `RESOLV HOSTS/AHOSTS/REVERSE` 세 개가 전부 `/etc/hosts` 에서 답을 받아 브리지에 닿지 않고, `RESOLV LEGACY DNS` 는 네트워크가 없어 `SKIP` 이었다. 잡은 것은 `dig -v` 를 돌리는 폭 검사였다. 이제 `RESOLV BRIDGE ABSENT` 와 `ALR DIG VERSION{, NO BRIDGE}` 가 매번 돈다.
+
 ### R15 (원 진단). 게스트 DNS가 동작하지 않는다 — Private DNS / VPN 환경 — `MEASURED`
 
 **2026-08-02 실측 (SM-X236N).** 게스트에서 이름 해석이 전부 실패한다:

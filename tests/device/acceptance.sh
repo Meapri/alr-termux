@@ -748,6 +748,35 @@ else
     emit "RESOLV LEGACY DNS" SKIP "no network"
 fi
 
+# THE BRIDGE-ABSENT PATH.  getaddrinfo falls back to glibc's own resolver when
+# alr's resolver daemon is not running -- documented as correct for devices
+# without Private DNS or a VPN, so it is a supported path, not an error path.
+#
+# It ABORTED.  glibc allocates an addrinfo chain as ONE block, with ai_addr and
+# ai_canonname pointing inside it, while our freeaddrinfo() frees the three
+# separately because that is how the bridge path allocates them.  Handing back
+# glibc's structure made the caller's freeaddrinfo() free an interior pointer:
+#
+#   $ ALR_RESOLV_SOCK= alr run dig -v
+#   free(): invalid pointer
+#
+# One failed daemon away from crashing every name lookup in the guest, and
+# nothing here noticed, because all three RESOLV checks above answer from
+# /etc/hosts and never reach the bridge at all.
+ckc "RESOLV BRIDGE ABSENT" "localhost" \
+    env ALR_RESOLV_SOCK= $ALR run /usr/bin/getent hosts localhost
+if [ -x "$R/usr/bin/dig" ]; then
+    # dig is what actually caught both bugs, via the breadth sweep rather than
+    # this suite.  It is here now: it calls getaddrinfo during startup even for
+    # `-v`, so it exercises the bridge without needing a network.
+    ckc "ALR DIG VERSION" "DiG 9." $ALR run /usr/bin/dig -v
+    ckc "ALR DIG VERSION NO BRIDGE" "DiG 9." \
+        env ALR_RESOLV_SOCK= $ALR run /usr/bin/dig -v
+else
+    emit "ALR DIG VERSION" SKIP "dnsutils not installed"
+    emit "ALR DIG VERSION NO BRIDGE" SKIP "dnsutils not installed"
+fi
+
 echo
 echo "── 알려진 미구현 (회귀 감시) ──"
 # Android denies /proc/stat to app UIDs, so libuv finds no cpuN lines and

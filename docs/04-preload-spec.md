@@ -336,6 +336,8 @@ glibc 2.34+ 는 `files` 백엔드를 libc 에 내장했고, 리터럴 `/etc/pass
 > `MEASURED` 2026-08-03: `getsockname` → `/data/data/com.termux/.../tmp/x.sock`, 원하는 값 `/tmp/x.sock`
 > 프로그램은 이 경로를 **출력하고, 락 파일과 pid 파일에 쓰고, 다른 프로세스에 넘긴다.**
 
+> ⛔ **preload 내부에서 소켓을 여는 코드는 `real_bind`/`real_connect` 를 써야 한다.** `rb_connect()`(리졸버 브리지)가 평범한 `connect()` 를 부르고 있었고, 그건 같은 번역 단위의 **우리 래퍼**로 바인딩된다. `ALR_RESOLV_SOCK` 은 호스트 경로라 재작성되면서 브리지가 통째로 끊겼다 — 증상은 `dig -v` 의 `free(): invalid pointer` 였다([RISKS R15](RISKS.md)). 규칙: **alr 자신의 경로는 `rw()` 를 통과시키지 않는다.**
+
 `accept(2)` 자체가 zygote 필터에 막혀 있다는 것은 별개의 사실이다 — [§A6](01-platform-facts.md) 참조. preload 가 `accept4(f,a,l,0)` 로 구현한다.
 
 ## 7. `/proc` 가상화

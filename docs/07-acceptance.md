@@ -209,6 +209,13 @@ ALR CODEX LINKAGE:                KNOWN_FAIL:static-unhooked
 ALR PTY TMUX:                     PASS
 PRELOAD UNIX SOCKET PATH:         PASS   ← bind/connect 재작성 + 추상 소켓 통과 (대조)
 PRELOAD PATH COVERAGE:            PASS   ← xattr/inotify/pathconf/getsockname/nftw/setmntent/glob
+RESOLV HOSTS FILES:               PASS
+RESOLV AHOSTS FILES:              PASS
+RESOLV REVERSE FILES:             PASS
+RESOLV LEGACY DNS:                PASS
+RESOLV BRIDGE ABSENT:             PASS   ← 브리지 없는 폴백. 이게 abort 하고 있었다
+ALR DIG VERSION:                  PASS
+ALR DIG VERSION NO BRIDGE:        PASS
 DOCTOR P11 DYNAMIC CLEAN:         PASS   ← /bin/true: 0 svc
 DOCTOR P11 STATIC FLAGGED:        PASS   ← ld.so: PT_INTERP 없음
 DOCTOR P11 COUNTS NONZERO:        PASS   ← 인자만 받고 PASS 찍는 스텁을 거른다
@@ -225,6 +232,8 @@ CLI CONFIG BAD VALUE:             PASS
 CLI GUEST USERDB:                 PASS   ← whoami → alr
 CLI GUEST USERDB LS:              PASS   ← ls -ld /root → "alr alr" (이전: "10297 10297")
 ```
+
+> **리졸버 검사가 왜 일곱 개인가.** 앞의 세 개는 전부 `/etc/hosts` 에서 답을 받아 **브리지에 닿지 않는다.** 그래서 브리지가 두 가지 방식으로 완전히 깨져 있는 동안 셋 다 초록이었다([RISKS R15](RISKS.md)). 잡은 것은 이 스위트가 아니라 `dig -v` 를 돌리는 폭 검사였고, 증상은 이름 해석 실패가 아니라 `free(): invalid pointer` 라는 **abort** 였다. `RESOLV BRIDGE ABSENT` 는 브리지가 없을 때의 폴백을 명시적으로 밟는다 — 데몬이 안 뜬 기기에서 지원되는 경로이고, 거기서 게스트의 모든 이름 조회가 죽고 있었다.
 
 > **`PRELOAD PATH COVERAGE` 가 재는 것.** 일곱 개 중 여섯은 양성이고 하나는 **음성 대조**다.
 > `glob-guest` 는 `glob()` 이 **게스트 경로**를 돌려주는지 본다 — 결과를 되돌리지 않는 "꼼꼼하게 다
