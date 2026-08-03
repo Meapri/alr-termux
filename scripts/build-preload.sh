@@ -68,6 +68,17 @@ mkdir -p "$(dirname "$OUT")"
     `# only if everything feeding it already is.  Dropping it removes one` \
     `# more thing to reason about in an artifact nobody debugs from a core.` \
     -Wl,--build-id=none \
+    `# AND DROP DWARF ENTIRELY.  -ffile-prefix-map only rewrites paths under` \
+    `# $PWD; the debug info also names the TOOLCHAIN's own headers, and CI` \
+    `# unpacks zig INTO the checkout, so those landed inside $PWD for a build` \
+    `# run from the repo root and outside it for one run from anywhere else:` \
+    `#   build 1:  zig-x86_64-linux-0.16.0/lib/include` \
+    `#   build 2:  /home/runner/work/alr-termux/alr-termux/zig-.../lib/include` \
+    `# Chasing that with more prefix maps means tracking where each machine` \
+    `# keeps its compiler.  A shipped interposer is not debugged from a core` \
+    `# dump -- it is diagnosed with ALR_LOG -- so the DWARF buys nothing and` \
+    `# costs the one property the printed sha256 exists to provide.` \
+    -Wl,--strip-debug \
     -I src/common \
     ${ALR_CFLAGS_EXTRA:-} \
     -o "$OUT" $SRC
