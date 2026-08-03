@@ -338,6 +338,18 @@ static int fix_hardlinks(const char *tarball, const char *root,
         while (k && (sep[9 + k - 1] == '\n' || sep[9 + k - 1] == '\r')) k--;
         sep[9 + k] = '\0';
 
+        /* Both halves come from the archive, so both are attacker-controlled
+         * under `alr install --url`.  An absolute or climbing name would make
+         * link() operate outside the extraction root -- and unlike the symlink
+         * case, a hardlink to a file outside is indistinguishable from the
+         * real thing afterwards. */
+        if (name[0] == '/' || (sep + 9)[0] == '/' ||
+            strstr(name, "../") || strstr(sep + 9, "../")) {
+            fprintf(stderr, "alr: REJECTING hardlink member outside the "
+                            "rootfs: %s -> %s\n", name, sep + 9);
+            failed++;
+            continue;
+        }
         snprintf(dst, sizeof dst, "%s/%s", root, name);
         snprintf(src, sizeof src, "%s/%s", root, sep + 9);
 
@@ -395,7 +407,46 @@ static int guest_symlink(const char *R, const char *link, const char *target)
  *
  * `depth` is the directory's depth below the rootfs root, which is exactly the
  * number of "../" needed to climb back to it. */
-static void relativize_tree(const char *dir, int depth, int *fixed, int *failed)
+/* Does a symlink target climb above the extraction root?
+ *
+ * docs/05 §2 requires rejecting link targets that escape, and GNU tar does not
+ * check this -- it creates `x -> ../../../etc/passwd` exactly as written.  The
+ * sha256-verified ubuntu-base has none, but `alr install --url` accepts any
+ * archive the user names, and this is the one §2 rule the shell-out did not
+ * already satisfy (ADR 0009).
+ *
+ * Purely lexical, which is the right test here: `depth` is how far the
+ * containing directory sits below the root, and every `..` in the target
+ * climbs one.  Going negative at any point means the link reaches outside,
+ * whether or not the intermediate directories happen to exist right now --
+ * a target that escapes and comes back would still resolve outside the root
+ * for as long as the intermediate component is itself a symlink. */
+static int link_escapes(const char *tgt, int depth)
+{
+    const char *p = tgt;
+    int lvl = depth;
+
+    if (*p == '/') return 0;            /* absolute: handled by the caller */
+    while (*p) {
+        const char *s = p;
+        size_t n;
+        while (*p && *p != '/') p++;
+        n = (size_t)(p - s);
+        while (*p == '/') p++;
+        if (n == 0 || (n == 1 && s[0] == '.')) continue;
+        if (n == 2 && s[0] == '.' && s[1] == '.') {
+            if (--lvl < 0) return 1;
+        } else if (*p) {
+            /* Only non-final components descend; the last one is the target
+             * name itself and cannot be stepped into. */
+            lvl++;
+        }
+    }
+    return 0;
+}
+
+static void relativize_tree(const char *dir, int depth, int *fixed, int *failed,
+                            int *escaped)
 {
     DIR *d = opendir(dir);
     struct dirent *e;
@@ -407,7 +458,9 @@ static void relativize_tree(const char *dir, int depth, int *fixed, int *failed)
         if (snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >= (int)sizeof path)
             continue;
         if (lstat(path, &st) != 0) continue;
-        if (S_ISDIR(st.st_mode)) { relativize_tree(path, depth + 1, fixed, failed); continue; }
+        if (S_ISDIR(st.st_mode)) {
+            relativize_tree(path, depth + 1, fixed, failed, escaped); continue;
+        }
         if (!S_ISLNK(st.st_mode)) continue;
         {
             char tgt[ALR_PBUF], rel[ALR_PBUF];
@@ -416,7 +469,15 @@ static void relativize_tree(const char *dir, int depth, int *fixed, int *failed)
             int k;
             if (r <= 0) continue;
             tgt[r] = '\0';
-            if (tgt[0] != '/') continue;            /* already relative */
+            if (tgt[0] != '/') {                    /* already relative */
+                if (link_escapes(tgt, depth)) {
+                    fprintf(stderr, "alr: REJECTING symlink that escapes the "
+                                    "rootfs: %s -> %s\n", path, tgt);
+                    unlink(path);
+                    (*escaped)++;
+                }
+                continue;
+            }
             /* /proc, /sys and /dev are NOT rewritten at runtime either, so an
              * absolute target into them is already correct. */
             if (alr_is_sysdir(tgt)) continue;
@@ -1381,11 +1442,15 @@ static int cmd_install(const char *distro, const char *url_override)
     if (fix_hardlinks(tarball, part, &rep.members, &rep.special) < 0)
         fprintf(stderr, "alr: hardlink fixup incomplete\n");
 
-    {   int fixed = 0, failed = 0;
-        relativize_tree(part, 0, &fixed, &failed);
+    {   int fixed = 0, failed = 0, escaped = 0;
+        relativize_tree(part, 0, &fixed, &failed, &escaped);
         printf("alr: absolute symlinks: %d relativized, %d failed\n", fixed, failed);
         if (failed) fprintf(stderr, "alr: WARNING %d symlink(s) left absolute; "
                                     "they will not resolve inside the guest\n", failed);
+        if (escaped)
+            die("extract-traversal-reject",
+                "the archive contains symlinks pointing outside the rootfs; "
+                "they were removed and nothing was installed");
     }
 
     {   /* setuid/setgid bits are inert on /data (nosuid) and only produce

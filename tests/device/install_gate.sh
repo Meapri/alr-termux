@@ -183,6 +183,41 @@ else
 fi
 rm -rf "$GATE_ROOT/fake" "$CACHE/fake.tar.gz" "$FAKE"
 
+# (a2b) A tarball with a symlink that escapes the extraction root.  GNU tar
+# creates `x -> ../../../etc/passwd` exactly as written -- correct behaviour for
+# tar, and the one docs/05 §2 rule the shell-out never satisfied (ADR 0009).
+# Written as a test because a rule stated in a spec and never violated on
+# purpose has never been shown to do anything.
+ESC="$GATE_ROOT/escsrc"
+rm -rf "$ESC"; mkdir -p "$ESC/lib" "$ESC/bin" "$ESC/usr/bin" "$ESC/etc" "$ESC/deep/er"
+cp "$G/lib/ld-linux-aarch64.so.1" "$ESC/lib/" 2>/dev/null
+cp "$G/bin/sh" "$ESC/bin/" 2>/dev/null
+cp "$G/usr/bin/env" "$ESC/usr/bin/" 2>/dev/null
+printf 'ID=ubuntu\n' > "$ESC/etc/os-release"
+ln -s ../../../../../../etc/hosts "$ESC/deep/er/escape"
+ln -s ../../etc/os-release        "$ESC/deep/er/legit"
+tar -czf "$CACHE/esc.tar.gz" -C "$ESC" . 2>/dev/null
+rm -rf "$GATE_ROOT/esc"
+out=$(ALR_ROOT_DIR="$GATE_ROOT" "$ALR" install esc \
+      --url "file://$CACHE/esc.tar.gz" 2>&1)
+rc=$?
+if [ "$rc" != 0 ] && grep -q 'reason=extract-traversal-reject' <<<"$out"; then
+    emit "INSTALL REJECTS ESCAPING SYMLINK" PASS "rc=$rc"
+else
+    emit "INSTALL REJECTS ESCAPING SYMLINK" FAIL "rc=$rc"
+fi
+# ...and the POSITIVE control: a relative symlink that stays inside must not
+# trip it.  Nearly every symlink in a real rootfs is one of these (20 in
+# ubuntu-base), so a check that rejected them would fail every install.
+rm -rf "$GATE_ROOT/esc" "$ESC/deep/er/escape"
+tar -czf "$CACHE/esc.tar.gz" -C "$ESC" . 2>/dev/null
+ALR_ROOT_DIR="$GATE_ROOT" "$ALR" install esc \
+    --url "file://$CACHE/esc.tar.gz" >/dev/null 2>&1
+[ -L "$GATE_ROOT/esc/deep/er/legit" ] \
+    && emit "INSTALL KEEPS INTERNAL SYMLINK" PASS \
+    || emit "INSTALL KEEPS INTERNAL SYMLINK" FAIL "an in-rootfs symlink was rejected"
+rm -rf "$GATE_ROOT/esc" "$CACHE/esc.tar.gz" "$ESC"
+
 # (a3) `alr install -d <name>` -- the form every other subcommand accepts --
 # used to install a rootfs literally NAMED "-d" and report success, because the
 # option scan took argv[i+1] as the distro whatever it was and "-d" is legal

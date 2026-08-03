@@ -38,13 +38,15 @@ proot-distro는 v5.0.2(2026-05-17)부터 Python이고 OCI 이미지를 쓴다. t
 
 ## 2. 안전 추출
 
-`src/cli/alr_untar.c`. 규칙:
+> ⚠️ **`src/cli/alr_untar.c` 는 만들지 않는다 — [ADR 0009](adr/0009-no-in-process-untar.md).** 아래 규칙은 그대로 요구사항이고, 대부분은 GNU tar 의 플래그와 비루트 실행이 이미 만족한다. **채우지 못하던 하나** — 추출 루트를 벗어나는 링크 타깃 — 은 2026-08-04 에 추출 후 검사로 닫혔다(`reason=extract-traversal-reject`).
+
+규칙:
 
 | 규칙 | 이유 |
 |---|---|
-| 절대경로 멤버 거부 | traversal |
-| `..` 컴포넌트 거부 | traversal |
-| 심링크/하드링크 타깃이 추출 루트를 벗어나면 거부 | traversal |
+| 절대경로 멤버 거부 | traversal. GNU tar 의 기본 동작(`-P` 없이는 선행 `/` 를 제거) |
+| `..` 컴포넌트 거부 | traversal. GNU tar 의 기본 동작(`..` 를 포함한 멤버를 거부) |
+| 심링크/하드링크 타깃이 추출 루트를 벗어나면 거부 | traversal. **GNU tar 는 이걸 안 본다** — `x -> ../../../etc/passwd` 를 적힌 그대로 만든다. `relativize_tree()` 가 추출 후 어휘적으로 검사하고(`depth` 만큼 내려와 있으니 `..` 하나가 한 칸 올라간다, 음수가 되면 탈출) 해당 심링크를 지운 뒤 설치 전체를 실패시킨다. 하드링크 멤버는 `fix_hardlinks()` 가 이름·타깃 양쪽을 검사한다 — 하드링크는 만들고 나면 진짜와 구별되지 않으므로 |
 | blk/chr/fifo/socket 멤버 **스킵** | 비루트에서 `mknod` 불가. (스톡 이미지엔 없지만 방어) |
 | `chown`/`lchown` **절대 호출 안 함** | 비루트. 모든 파일이 Termux UID 소유가 된다 |
 | setuid/setgid 비트 **마스킹** (`& ~07000`) | `/data`는 nosuid라 무의미. 12개 해당 바이너리는 필요도 원하지도 않는 것들 |
@@ -259,7 +261,8 @@ already-installed          bad-distro-name            bad-env
 bad-option                 bad-workdir                boot-enoent
 boot-failed                doctor-missing             doctor-unknown-option
 download-corrupt           download-network           env-reserved
-extract-permission         install-unknown-option     ldso-missing
+extract-permission         extract-traversal-reject   install-unknown-option
+ldso-missing
 no-supervisor-requested    not-a-rootfs               preload-install-failed
 preload-missing-in-rootfs  preload-stale              remove-failed
 rootfs-incomplete          rootfs-missing             rootfs-unbootable
@@ -270,5 +273,7 @@ workdir-enoent
 > ⚠️ **이 목록은 2026-08-03 에 실측으로 다시 썼다.** 이전 판은 17개를 적어 두었는데 코드가 방출하는 것은 22개였고 **겹치는 것이 5개뿐**이었다(`download-network` `extract-permission` `ldso-missing` `boot-failed` `boot-enoent`). 목표 [G6](00-product.md) 은 "모든 실패가 안정적 `reason=` 코드로 분류된다" 이고 그 측정 수단이 이 어휘인데, **어느 쪽도 지키지 않는 어휘는 G6 을 참으로도 거짓으로도 만들 수 없다.** 그래서 G6 은 목표가 아니라 문장이었다.
 >
 > 지워진 12개는 **구현되지 않은 기능의 코드**였다 — `extract-traversal-reject`(자체 untar, §2), `apt-*-failed`, `node-fetch-failed`, `codex-fetch-failed`, `download-404`, `extract-disk-full`, `repair-write-failed`, `boot-sigsys`, `ldso-option-unsupported`, `unsupported-android-policy`. **그 기능이 들어오면 코드와 함께 이 목록으로 돌아온다** — 게이트가 그때 강제한다. 미리 적어 두는 것은 계약이 아니라 약속이다.
+>
+> 2026-08-04 에 `extract-traversal-reject` 가 실제로 그렇게 돌아왔다([ADR 0009](adr/0009-no-in-process-untar.md)). 자체 untar 는 만들지 않기로 했지만 §2 의 traversal 규칙 중 GNU tar 가 채우지 못하던 것 — 추출 루트를 벗어나는 링크 타깃 — 은 코드로 닫혔고, 코드가 방출하므로 어휘로 돌아왔다.
 >
 > `download-checksum-mismatch` 는 같은 뜻의 `download-corrupt` 로 이미 출하됐다(v0.3.0). **출하된 코드가 안정 계약**이므로 스펙 쪽을 버렸다.
