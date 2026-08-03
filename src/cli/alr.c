@@ -826,6 +826,44 @@ static int cmd_update_components(const char *distro)
     return 0;
 }
 
+/* docs/05-provisioning-spec.md §4: install must not declare success on a
+ * rootfs it has not checked.
+ *
+ * tar's exit code cannot carry this.  A HEALTHY extraction exits non-zero here
+ * -- hardlink members fail under Android's SELinux policy and that is expected
+ * (see the "continuing" branch above) -- so the code has always ignored it.
+ * Nor does comparing the tar listing against the disk work: a TRUNCATED
+ * archive lists fewer members and extracts exactly those, so listing and disk
+ * agree perfectly while the rootfs is useless.
+ *
+ * What actually separates the two cases is whether the essentials are there.
+ * MEASURED 2026-08-03 by tests/device/install_gate.sh: `alr install` from a
+ * tarball truncated to 2 MB reported SUCCESS. */
+static int verify_rootfs(const char *R)
+{
+    /* Each of these is load-bearing, and each fails differently later if it is
+     * absent -- ld.so with "rootfs looks corrupt", /bin/sh with every shebang
+     * script dying, os-release with silent misidentification. */
+    static const char *req[] = {
+        "lib/ld-linux-aarch64.so.1",
+        "bin/sh",
+        "usr/bin/env",
+        "etc/os-release",
+        NULL
+    };
+    char p[ALR_PBUF];
+    int i, missing = 0;
+
+    for (i = 0; req[i]; i++) {
+        snprintf(p, sizeof p, "%s/%s", R, req[i]);
+        if (access(p, F_OK) != 0) {
+            fprintf(stderr, "alr: rootfs is missing %s\n", req[i]);
+            missing++;
+        }
+    }
+    return missing;
+}
+
 static int cmd_install(const char *distro, const char *url_override)
 {
     char R[ALR_PBUF], part[ALR_PBUF], tarball[ALR_PBUF], cache[ALR_PBUF];
@@ -977,6 +1015,13 @@ static int cmd_install(const char *distro, const char *url_override)
     if (install_preload(part) != 0)
         die("preload-install-failed",
             "the rootfs would run WITHOUT path virtualization");
+
+    /* Check BEFORE the rename: a rootfs that fails this must never appear at
+     * the real path, where the next `alr run` would pick it up. */
+    if (verify_rootfs(part) != 0)
+        die("rootfs-incomplete",
+            "extraction did not produce a usable rootfs (truncated or "
+            "corrupt tarball?); nothing was installed");
 
     if (rename(part, R) != 0) die("extract-permission", "rename into place failed");
     printf("alr: installed %s\n", R);

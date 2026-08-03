@@ -74,6 +74,18 @@ accept)
         chmod +x tests/device/acceptance.sh && \
         ${ALR_DISTROS_DIR:+ALR_ROOT_DIR=\$HOME/$ALR_DISTROS_DIR }ALR=./alr tests/device/acceptance.sh"
     ;;
+install-gate)
+    # The install path is the one thing acceptance.sh cannot cover: it refuses
+    # to run unless the rootfs already exists.  Separate subcommand because it
+    # costs a full extraction.
+    assert_context
+    sync_tree
+    "${SSH[@]}" "cd ~/$REMOTE && \
+        clang $CFLAGS_DEV -Isrc/common -Isrc/supervisor -o alr \
+              src/cli/alr.c src/cli/alr_resolvd.c src/common/alr_exec_rule.c src/common/alr_elf.c src/supervisor/alr_supervisor.c && \
+        chmod +x tests/device/install_gate.sh && \
+        ALR=./alr tests/device/install_gate.sh"
+    ;;
 bench)
     # Was: build rw_cost and run it bare.  That printed per-op costs and a
     # MODELED total; it could not produce the total-cost budget docs/04 §13

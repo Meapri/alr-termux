@@ -115,6 +115,14 @@ alr:x:<uid>:<gid>:alr:/root:/bin/bash
 
 ## 4. 첫 부팅 검증
 
+> ✅ **구현됨 (부분) — 2026-08-03.** `alr install` 은 이제 `rename` **전에** 필수 파일을 확인하고, 없으면 `reason=rootfs-incomplete` 로 죽는다. 확인 대상: `lib/ld-linux-aarch64.so.1`, `bin/sh`, `usr/bin/env`, `etc/os-release`.
+>
+> **왜 tar 의 종료 코드로는 안 되는가**: 정상 추출도 0이 아니다 — 하드링크 멤버가 Android SELinux 정책에 막히는 것이 예상된 동작이라 코드가 예전부터 무시해 왔다. **왜 목록 대조로도 안 되는가**: 잘린 아카이브는 **목록도 짧아서** 목록과 디스크가 완벽히 일치한다. 갈라지는 지점은 필수 파일의 존재 여부뿐이다.
+>
+> 근거: [`tests/device/install_gate.sh`](../tests/device/install_gate.sh) 가 2 MB 로 자른 tarball 로 설치를 시도한다. 이 검사가 붙기 전 그 설치는 **성공을 보고했다.**
+>
+> **아직 아닌 것**: 아래 §4 가 적은 9줄 리포트(`INSTALL DOWNLOAD/VERIFY/...`)는 출력되지 않는다. 설치 경로의 커버리지는 `install_gate.sh` 가 들고 있다.
+
 `alr install`은 끝나기 전에 다음을 순서대로 수행하고, 실패 시 rootfs를 남기되 명확히 보고한다.
 
 ```
@@ -228,9 +236,9 @@ bad-workdir                boot-enoent                boot-failed
 doctor-missing             doctor-unknown-option      download-corrupt
 download-network           env-reserved               extract-permission
 ldso-missing               no-supervisor-requested    preload-install-failed
-preload-missing-in-rootfs  preload-stale              rootfs-missing
-too-many-env               unhooked-static-binary     unsupported-distro
-workdir-enoent
+preload-missing-in-rootfs  preload-stale              rootfs-incomplete
+rootfs-missing             too-many-env               unhooked-static-binary
+unsupported-distro         workdir-enoent
 ```
 
 > ⚠️ **이 목록은 2026-08-03 에 실측으로 다시 썼다.** 이전 판은 17개를 적어 두었는데 코드가 방출하는 것은 22개였고 **겹치는 것이 5개뿐**이었다(`download-network` `extract-permission` `ldso-missing` `boot-failed` `boot-enoent`). 목표 [G6](00-product.md) 은 "모든 실패가 안정적 `reason=` 코드로 분류된다" 이고 그 측정 수단이 이 어휘인데, **어느 쪽도 지키지 않는 어휘는 G6 을 참으로도 거짓으로도 만들 수 없다.** 그래서 G6 은 목표가 아니라 문장이었다.
