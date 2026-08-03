@@ -235,6 +235,33 @@ else
     fi
 fi
 
+# --- PRELOAD MANIFEST SOURCE DIGEST -----------------------------------------
+# scripts/make-release.sh and scripts/build-preload.sh must agree on what
+# source_sha256 means.  They did not, and the first v0.1.0 tag died in the
+# release job because of it -- a drift that only surfaced at release time.
+# Recompute the canonical recipe here so a push catches it instead:
+#     sha256( concat( sha256(file) for file in sort(SOURCES) ) )
+DEFSRC="src/preload/alr_preload.c
+src/common/alr_elf.c
+src/common/alr_elf.h
+src/common/alr_path_rule.h
+src/common/alr_resolv_proto.h"
+want_src=$(printf '%s\n' "$DEFSRC" | LC_ALL=C sort | while read -r f; do
+               [ -n "$f" ] || continue
+               sha256 "$f"
+           done | { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; } \
+           | cut -d' ' -f1)
+got_src=$(sed -n 's/.*"source_sha256"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+              "$MANIFEST" | head -1)
+if [ -z "$got_src" ]; then
+    emit "PRELOAD MANIFEST SOURCE DIGEST" FAIL "manifest has no source_sha256"
+elif [ "$got_src" = "$want_src" ]; then
+    emit "PRELOAD MANIFEST SOURCE DIGEST" PASS "${want_src%"${want_src#????????????????}"}…"
+else
+    emit "PRELOAD MANIFEST SOURCE DIGEST" FAIL \
+         "manifest=$got_src tree=$want_src"
+fi
+
 echo "──────────────────────────────────────────────────────────────"
 echo "  PASS=$pass  FAIL=$fail  SKIP=$skip"
 echo "ALR PRELOAD GATES: $([ $fail -eq 0 ] && echo PASS || echo FAIL)"

@@ -42,23 +42,46 @@ mkdir -p "$(dirname "$OUT")"
     ${ALR_CFLAGS_EXTRA:-} \
     -o "$OUT" $SRC
 
-if command -v shasum >/dev/null 2>&1; then _sha() { shasum -a 256 "$@"; }
-else                                        _sha() { sha256sum "$@"; }; fi
+if command -v sha256sum >/dev/null 2>&1; then
+    _sha()       { sha256sum "$1" | cut -d' ' -f1; }
+    _sha_stdin() { sha256sum      | cut -d' ' -f1; }
+elif command -v shasum >/dev/null 2>&1; then
+    _sha()       { shasum -a 256 "$1" | cut -d' ' -f1; }
+    _sha_stdin() { shasum -a 256      | cut -d' ' -f1; }
+else
+    echo "neither sha256sum nor shasum found" >&2; exit 2
+fi
 
 sha=$(_sha "$OUT")
 # docs/04-preload-spec.md §1 and docs/05-provisioning-spec.md §3.4 require
 # source_sha256 -- a digest of the inputs, not the path list that used to be
 # emitted here.  Without it a manifest cannot answer "was this .so built from
 # THIS tree", which is the whole point of shipping one.
-SRC_ALL="$SRC src/common/alr_elf.h src/common/alr_path_rule.h src/common/alr_resolv_proto.h"
-srcsha=$(for f in $SRC_ALL; do _sha "$f"; done | LC_ALL=C sort | _sha)
+#
+# The recipe and the file list are CANONICALLY defined in scripts/make-release.sh
+# (preload_source_sha256 / PRELOAD_SOURCES) and reproduced verbatim here:
+#
+#     sha256( concat( sha256(file) for file in sort(SOURCES) ) )
+#
+# Sorting the file NAMES and hashing only the digests keeps the result stable
+# against file order.  The first v0.1.0 tag failed because these two disagreed
+# -- this side sorted the digest LINES and folded the file names in.
+SRC_ALL="src/preload/alr_preload.c
+src/common/alr_elf.c
+src/common/alr_elf.h
+src/common/alr_path_rule.h
+src/common/alr_resolv_proto.h"
+srcsha=$(printf '%s\n' "$SRC_ALL" | LC_ALL=C sort | while read -r f; do
+             [ -n "$f" ] || continue
+             _sha "$f"
+         done | _sha_stdin)
 cat > "${OUT%.so}.manifest.json" <<EOF
 {
   "zig_version": "$have",
   "target": "$TARGET",
   "sources": "$SRC",
-  "source_sha256": "${srcsha%% *}",
-  "output_sha256": "${sha%% *}"
+  "source_sha256": "$srcsha",
+  "output_sha256": "$sha"
 }
 EOF
 
