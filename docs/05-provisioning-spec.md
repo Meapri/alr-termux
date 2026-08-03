@@ -259,7 +259,8 @@ alr update-components ubuntu-24.04   libalr_preload.so 만 갱신
 ```
 already-installed          bad-distro-name            bad-env
 bad-option                 bad-workdir                boot-enoent
-boot-failed                doctor-missing             doctor-unknown-option
+boot-failed                config-bad-value           config-unknown-key
+config-write-failed        doctor-missing             doctor-unknown-option
 download-corrupt           download-network           env-reserved
 extract-permission         extract-traversal-reject   install-unknown-option
 ldso-missing

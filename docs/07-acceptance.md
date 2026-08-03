@@ -209,6 +209,12 @@ ALR CODEX LINKAGE:                KNOWN_FAIL:static-unhooked
 ALR PTY TMUX:                     PASS
 PRELOAD UNIX SOCKET PATH:         PASS   ← bind/connect 재작성 + 추상 소켓 통과 (대조)
 PRELOAD PATH COVERAGE:            PASS   ← xattr/inotify/pathconf/getsockname/nftw/setmntent/glob
+CLI CONFIG GET DEFAULT:           PASS
+CLI CONFIG SET REPORTS NEW:       PASS   ← 쓴 뒤의 값을 보고하는가 (cfg() 메모이즈)
+CLI CONFIG AFFECTS RUNTIME:       PASS   ← 설정이 `alr run id -u` 를 0 으로 바꾸는가
+CLI CONFIG FLAG OUTRANKS:         PASS   ← --no-fakeroot 가 설정을 이기는가
+CLI CONFIG UNKNOWN KEY:           PASS
+CLI CONFIG BAD VALUE:             PASS
 CLI GUEST USERDB:                 PASS   ← whoami → alr
 CLI GUEST USERDB LS:              PASS   ← ls -ld /root → "alr alr" (이전: "10297 10297")
 ```

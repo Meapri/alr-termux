@@ -354,6 +354,33 @@ else
     emit "PRELOAD PATH COVERAGE" SKIP "no libc6-dev in the guest"
 fi
 
+# ── alr config (docs/06-cli-spec.md §2) ─────────────────────────────────
+# Run under a scratch HOME so this never touches the user's real
+# ~/.alr/config.toml -- a test suite that edits the machine it measures is not
+# a test suite.
+_cfghome="$ALR_ROOT_DIR/alrcfghome"; rm -rf "$_cfghome"; mkdir -p "$_cfghome"
+ck  "CLI CONFIG GET DEFAULT" "ubuntu-24.04" \
+    env HOME="$_cfghome" $ALR config get default_distro
+# The confirmation line must report the value AFTER the write.  cfg() memoises
+# and main() has already called it, so the first version printed the value from
+# before the write -- "runtime.fakeroot = false" one line after writing true.
+ckc "CLI CONFIG SET REPORTS NEW" "runtime.fakeroot = true   (config)" \
+    env HOME="$_cfghome" $ALR config set runtime.fakeroot true
+# The one that matters: does the file change what the runtime DOES.  A config
+# command that only round-trips its own file proves nothing.
+ck  "CLI CONFIG AFFECTS RUNTIME" "0" \
+    env HOME="$_cfghome" $ALR run id -u
+# ...and a flag still outranks it (§1.1: 기본 "설정값").
+ck  "CLI CONFIG FLAG OUTRANKS" "$(id -u)" \
+    env HOME="$_cfghome" $ALR run --no-fakeroot id -u
+# An unknown key must be refused, not accepted-and-ignored: a typo'd setting
+# that looks accepted is the classic config-file failure.
+ckc "CLI CONFIG UNKNOWN KEY" "reason=config-unknown-key" \
+    env HOME="$_cfghome" $ALR config get no_such_setting
+ckc "CLI CONFIG BAD VALUE" "reason=config-bad-value" \
+    env HOME="$_cfghome" $ALR config set runtime.log notanumber
+rm -rf "$_cfghome"
+
 # The Termux uid has no entry in the guest's user databases, so every ownership
 # display degrades to a raw number -- MEASURED before the fix: `ls -ld /root`
 # printed "6 10297 10297" and `whoami` said "cannot find name for user ID

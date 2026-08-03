@@ -88,9 +88,162 @@ static int distro_name_ok(const char *d)
     return i <= 64;
 }
 
+
+/* ── configuration file (docs/06-cli-spec.md §2) ─────────────────────────
+ *
+ * $PREFIX/etc/alr/config.toml (global), then $HOME/.alr/config.toml (user),
+ * with the user file winning.  Everything here sits BELOW the environment and
+ * below flags: flag > env > user config > global config > built-in.
+ *
+ * THE SCHEMA IS SMALLER THAN §2 SKETCHED, and deliberately.  Two of the seven
+ * keys were checked against what the code actually does and dropped:
+ *
+ *   [env] passthrough  is already true of everything.  alr copies the whole
+ *                      host environ into the guest minus a blocklist, so an
+ *                      allow-list of names to forward would only be able to
+ *                      RESTRICT what already passes -- the opposite of what
+ *                      the key means.  A key that cannot change any outcome
+ *                      is worse than no key: it reads as a control.
+ *   runtime.supervisor whose own documentation is "false 로 두지 말 것 --
+ *                      부팅이 안 된다".  A persistent setting whose only
+ *                      non-default value breaks every subsequent run is a
+ *                      footgun; `--no-supervisor` already exists per-run and
+ *                      announces itself with reason=no-supervisor-requested.
+ *
+ * The parser handles exactly this schema -- string, bool, integer, table
+ * headers, # comments.  It is not a TOML library and does not pretend to be:
+ * an unknown key is reported, not silently ignored, because a typo'd setting
+ * that appears to be accepted is the failure mode config files are famous for.
+ */
+struct alr_config {
+    char distro[128];      int has_distro;
+    int  fakeroot;         int has_fakeroot;
+    int  log;              int has_log;
+    char root[ALR_PBUF];   int has_root;
+    char mirror[512];      int has_mirror;
+    int  bad;              /* unknown keys seen while loading */
+};
+static struct alr_config g_cfg;
+static int g_cfg_loaded;
+
+static void cfg_path(char *out, size_t n, int user)
+{
+    const char *h = getenv("HOME");
+    if (user) snprintf(out, n, "%s/.alr/config.toml", (h && *h) ? h : ".");
+    else      snprintf(out, n, "%s/etc/alr/config.toml", prefix());
+}
+
+/* "$PREFIX/var/lib/alr" -> the expansion.  Only a LEADING $PREFIX, which is
+ * the only form §2 shows and the only one worth supporting: a general variable
+ * expander in a config path is a way to read the environment twice. */
+static void cfg_expand(const char *in, char *out, size_t n)
+{
+    if (!strncmp(in, "$PREFIX", 7)) snprintf(out, n, "%s%s", prefix(), in + 7);
+    else                            snprintf(out, n, "%s", in);
+}
+
+static char *cfg_trim(char *s)
+{
+    char *e;
+    while (*s == ' ' || *s == '\t') s++;
+    e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\n' || e[-1] == '\r'))
+        *--e = '\0';
+    return s;
+}
+
+/* Strip an unquoted #comment.  Quoted because a mirror URL may contain '#'. */
+static void cfg_decomment(char *s)
+{
+    int q = 0;
+    for (; *s; s++) {
+        if (*s == '"') q = !q;
+        else if (*s == '#' && !q) { *s = '\0'; return; }
+    }
+}
+
+static void cfg_unquote(char *s)
+{
+    size_t n = strlen(s);
+    if (n >= 2 && s[0] == '"' && s[n-1] == '"') { memmove(s, s + 1, n - 2); s[n-2] = '\0'; }
+}
+
+static int cfg_bool(const char *v, int *out)
+{
+    if (!strcmp(v, "true"))  { *out = 1; return 0; }
+    if (!strcmp(v, "false")) { *out = 0; return 0; }
+    return -1;
+}
+
+/* Apply one dotted key.  Returns 0 if the key is known and the value parsed. */
+static int cfg_apply(struct alr_config *c, const char *key, char *val)
+{
+    cfg_unquote(val);
+    if (!strcmp(key, "default_distro")) {
+        snprintf(c->distro, sizeof c->distro, "%s", val); c->has_distro = 1; return 0;
+    }
+    if (!strcmp(key, "runtime.fakeroot")) {
+        if (cfg_bool(val, &c->fakeroot) != 0) return -1;
+        c->has_fakeroot = 1; return 0;
+    }
+    if (!strcmp(key, "runtime.log")) {
+        char *end; long v = strtol(val, &end, 10);
+        if (end == val || *end) return -1;
+        c->log = (int)v; c->has_log = 1; return 0;
+    }
+    if (!strcmp(key, "paths.root")) {
+        cfg_expand(val, c->root, sizeof c->root); c->has_root = 1; return 0;
+    }
+    if (!strcmp(key, "network.mirror")) {
+        snprintf(c->mirror, sizeof c->mirror, "%s", val);
+        c->has_mirror = *val != '\0'; return 0;
+    }
+    return -1;
+}
+
+static void cfg_read(struct alr_config *c, const char *path)
+{
+    char line[1024], table[64] = "";
+    FILE *fp = fopen(path, "r");
+    if (!fp) return;
+    while (fgets(line, sizeof line, fp)) {
+        char *s, *eq, key[160];
+        cfg_decomment(line);
+        s = cfg_trim(line);
+        if (!*s) continue;
+        if (*s == '[') {
+            char *close = strchr(s, ']');
+            if (!close) continue;
+            *close = '\0';
+            snprintf(table, sizeof table, "%s", cfg_trim(s + 1));
+            continue;
+        }
+        if (!(eq = strchr(s, '='))) continue;
+        *eq = '\0';
+        if (*table) snprintf(key, sizeof key, "%s.%s", table, cfg_trim(s));
+        else        snprintf(key, sizeof key, "%s", cfg_trim(s));
+        if (cfg_apply(c, key, cfg_trim(eq + 1)) != 0) {
+            fprintf(stderr, "alr: %s: unknown or invalid setting `%s`\n", path, key);
+            c->bad++;
+        }
+    }
+    fclose(fp);
+}
+
+static const struct alr_config *cfg(void)
+{
+    char p[ALR_PBUF];
+    if (g_cfg_loaded) return &g_cfg;
+    g_cfg_loaded = 1;
+    cfg_path(p, sizeof p, 0); cfg_read(&g_cfg, p);
+    cfg_path(p, sizeof p, 1); cfg_read(&g_cfg, p);   /* user wins */
+    return &g_cfg;
+}
+
 static void distro_root(char *out, size_t n, const char *distro)
 {
     const char *root = getenv("ALR_ROOT_DIR");
+    if (!root || !*root) root = cfg()->has_root ? cfg()->root : NULL;
     if (!distro || !*distro) distro = "ubuntu-24.04";
     if (!distro_name_ok(distro))
         die("bad-distro-name",
@@ -823,7 +976,7 @@ static int discover_ubuntu(const char *rel, char *url, size_t urlsz,
 
     snprintf(cmd, sizeof cmd,
              "curl -fsSL --max-time 60 --retry 3 '%s/%s/release/SHA256SUMS' 2>/dev/null",
-             ALR_UBUNTU_CDIMAGE, rel);
+             cfg()->has_mirror ? cfg()->mirror : ALR_UBUNTU_CDIMAGE, rel);
     if (!(fp = popen(cmd, "r"))) return -1;
     while (fgets(line, sizeof line, fp)) {
         char h[80], name[256];
@@ -852,7 +1005,8 @@ static int discover_ubuntu(const char *rel, char *url, size_t urlsz,
     }
     pclose(fp);
     if (best < 0) return -1;
-    snprintf(url, urlsz, "%s/%s/release/%s", ALR_UBUNTU_CDIMAGE, rel, bestname);
+    snprintf(url, urlsz, "%s/%s/release/%s",
+             cfg()->has_mirror ? cfg()->mirror : ALR_UBUNTU_CDIMAGE, rel, bestname);
     snprintf(sha, shasz, "%s", besthash);
     return 0;
 }
@@ -1377,7 +1531,8 @@ static int cmd_install(const char *distro, const char *url_override)
             /* Offline / air-gapped fallback.  Say plainly that the download is
              * unverified rather than implying the pin is as good as a hash. */
             snprintf(durl, sizeof durl, "%s/24.04/release/%s",
-                     ALR_UBUNTU_CDIMAGE, ALR_UBUNTU_PIN);
+                     cfg()->has_mirror ? cfg()->mirror : ALR_UBUNTU_CDIMAGE,
+                     ALR_UBUNTU_PIN);
             dsha[0] = '\0';
             fprintf(stderr, "alr: WARNING SHA256SUMS unreachable; falling back to "
                             "the pinned %s WITHOUT hash verification\n",
@@ -1522,6 +1677,169 @@ static int cmd_install(const char *distro, const char *url_override)
             fprintf(stderr, "alr: codex install failed\n");
     }
     return 0;
+}
+
+
+/* ── `alr config` (docs/06-cli-spec.md §1, §2) ───────────────────────────
+ *
+ *   alr config            every setting, its effective value, and WHERE it
+ *                         came from
+ *   alr config get <key>  one effective value, bare, for scripts
+ *   alr config set <k> <v>  write it to the user file
+ *
+ * The source column is the part that earns its keep.  "fakeroot is true" is
+ * not actionable; "fakeroot is true, from the environment" tells you which of
+ * four places to edit, and it is the question anyone reading a config dump is
+ * actually asking.
+ */
+static const char *CFG_KEYS[] = {
+    "default_distro", "runtime.fakeroot", "runtime.log",
+    "paths.root", "network.mirror", NULL
+};
+
+/* Effective value of one key plus its provenance.  Mirrors exactly what the
+ * runtime does -- if these two ever disagree, the dump is a lie, so each arm
+ * below reads the same environment variable the runtime reads. */
+static void cfg_effective(const char *key, char *val, size_t vn,
+                          const char **src)
+{
+    const struct alr_config *c = cfg();
+    const char *e;
+
+    *src = "default";
+    if (!strcmp(key, "default_distro")) {
+        if ((e = getenv("ALR_DISTRO")) && *e) { snprintf(val, vn, "%s", e); *src = "env ALR_DISTRO"; return; }
+        if (c->has_distro) { snprintf(val, vn, "%s", c->distro); *src = "config"; return; }
+        snprintf(val, vn, "ubuntu-24.04"); return;
+    }
+    if (!strcmp(key, "runtime.fakeroot")) {
+        if ((e = getenv("ALR_FAKEROOT")) && *e) { snprintf(val, vn, "%s", *e == '1' ? "true" : "false"); *src = "env ALR_FAKEROOT"; return; }
+        if (c->has_fakeroot) { snprintf(val, vn, "%s", c->fakeroot ? "true" : "false"); *src = "config"; return; }
+        snprintf(val, vn, "false"); return;
+    }
+    if (!strcmp(key, "runtime.log")) {
+        if ((e = getenv("ALR_LOG")) && *e) { snprintf(val, vn, "%s", e); *src = "env ALR_LOG"; return; }
+        if (c->has_log) { snprintf(val, vn, "%d", c->log); *src = "config"; return; }
+        snprintf(val, vn, "0"); return;
+    }
+    if (!strcmp(key, "paths.root")) {
+        if ((e = getenv("ALR_ROOT_DIR")) && *e) { snprintf(val, vn, "%s", e); *src = "env ALR_ROOT_DIR"; return; }
+        if (c->has_root) { snprintf(val, vn, "%s", c->root); *src = "config"; return; }
+        snprintf(val, vn, "%s/var/lib/alr/distros", prefix()); return;
+    }
+    if (!strcmp(key, "network.mirror")) {
+        if (c->has_mirror) { snprintf(val, vn, "%s", c->mirror); *src = "config"; return; }
+        snprintf(val, vn, "%s", ALR_UBUNTU_CDIMAGE); return;
+    }
+    snprintf(val, vn, "");
+}
+
+static int cfg_known(const char *key)
+{
+    int i;
+    for (i = 0; CFG_KEYS[i]; i++) if (!strcmp(CFG_KEYS[i], key)) return 1;
+    return 0;
+}
+
+/* Rewrite the user file from the parsed struct.
+ *
+ * This does NOT preserve comments in that file -- the schema is closed and
+ * round-tripping comments means keeping a full document model for five keys.
+ * Said plainly here and in docs/06 §2 rather than discovered by someone whose
+ * annotations vanished. */
+static int cfg_write_user(const struct alr_config *c)
+{
+    char path[ALR_PBUF], dir[ALR_PBUF], tmp[ALR_PBUF];
+    char *slash;
+    FILE *fp;
+
+    cfg_path(path, sizeof path, 1);
+    snprintf(dir, sizeof dir, "%s", path);
+    if ((slash = strrchr(dir, '/'))) { *slash = '\0'; mkdir(dir, 0755); }
+    snprintf(tmp, sizeof tmp, "%s.alr-tmp", path);
+    if (!(fp = fopen(tmp, "w"))) return -1;
+    fputs("# written by `alr config set` -- comments are not preserved\n", fp);
+    if (c->has_distro) fprintf(fp, "default_distro = \"%s\"\n", c->distro);
+    if (c->has_fakeroot || c->has_log) {
+        fputs("\n[runtime]\n", fp);
+        if (c->has_fakeroot) fprintf(fp, "fakeroot = %s\n", c->fakeroot ? "true" : "false");
+        if (c->has_log)      fprintf(fp, "log = %d\n", c->log);
+    }
+    if (c->has_root)   fprintf(fp, "\n[paths]\nroot = \"%s\"\n", c->root);
+    if (c->has_mirror) fprintf(fp, "\n[network]\nmirror = \"%s\"\n", c->mirror);
+    if (fclose(fp) != 0) { unlink(tmp); return -1; }
+    if (rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    printf("alr: wrote %s\n", path);
+    return 0;
+}
+
+static int cmd_config(int argc, char **argv)
+{
+    char val[ALR_PBUF];
+    const char *src;
+    int i;
+
+    if (argc == 0) {
+        char gp[ALR_PBUF], up[ALR_PBUF];
+        cfg_path(gp, sizeof gp, 0);
+        cfg_path(up, sizeof up, 1);
+        printf("  global  %s%s\n", gp, access(gp, R_OK) == 0 ? "" : "   (absent)");
+        printf("  user    %s%s\n\n", up, access(up, R_OK) == 0 ? "" : "   (absent)");
+        for (i = 0; CFG_KEYS[i]; i++) {
+            cfg_effective(CFG_KEYS[i], val, sizeof val, &src);
+            printf("  %-18s %-44s %s\n", CFG_KEYS[i], val, src);
+        }
+        if (cfg()->bad)
+            fprintf(stderr, "\nalr: %d unknown setting(s) were ignored\n", cfg()->bad);
+        return cfg()->bad ? 1 : 0;
+    }
+
+    if (!strcmp(argv[0], "get")) {
+        if (argc < 2) die("bad-option", "usage: alr config get <key>");
+        if (!cfg_known(argv[1])) die("config-unknown-key", "no such setting");
+        cfg_effective(argv[1], val, sizeof val, &src);
+        printf("%s\n", val);
+        return 0;
+    }
+
+    if (!strcmp(argv[0], "set")) {
+        struct alr_config u;
+        char path[ALR_PBUF], v[ALR_PBUF];
+        if (argc < 3) die("bad-option", "usage: alr config set <key> <value>");
+        if (!cfg_known(argv[1])) die("config-unknown-key", "no such setting");
+        /* Edit the USER file only -- never the global one, which may be
+         * shared and is not this command's to rewrite.  Re-read it fresh
+         * rather than reusing cfg(), which is the two files MERGED: writing
+         * that back would silently copy every global setting into the user
+         * file and freeze it there. */
+        memset(&u, 0, sizeof u);
+        cfg_path(path, sizeof path, 1);
+        cfg_read(&u, path);
+        snprintf(v, sizeof v, "%s", argv[2]);
+        if (cfg_apply(&u, argv[1], v) != 0)
+            die("config-bad-value", "the value is not valid for this setting");
+        if (cfg_write_user(&u) != 0)
+            die("config-write-failed", "could not write the user config file");
+        /* cfg() memoises, and main() already called it to resolve the default
+         * distro -- so without this the confirmation line reports the value
+         * from BEFORE the write.  It printed "runtime.fakeroot = false" one
+         * line after writing true. */
+        memset(&g_cfg, 0, sizeof g_cfg);
+        g_cfg_loaded = 0;
+        cfg_effective(argv[1], val, sizeof val, &src);
+        printf("%s = %s   (%s)\n", argv[1], val, src);
+        /* Only an ENVIRONMENT variable can outrank what we just wrote.  The
+         * built-in default cannot -- saying so would be false, and it is what
+         * the first version of this said whenever the written value happened
+         * to equal the default. */
+        if (strncmp(src, "env ", 4) == 0)
+            fprintf(stderr, "alr: NOTE the effective value still comes from "
+                            "%s, which outranks the config file\n", src);
+        return 0;
+    }
+
+    die("bad-option", "usage: alr config [get <key> | set <key> <value>]");
+    return 1;
 }
 
 /* ── launch ──────────────────────────────────────────────────────────── */
@@ -1816,6 +2134,7 @@ static char **build_env(const struct launch *L, const char *guest_exe,
     /* --fakeroot / --no-fakeroot override the environment (§1.1: "설정값"). */
     if (ro && ro->fakeroot >= 0)      PUT("ALR_FAKEROOT=%d", ro->fakeroot);
     else if (getenv("ALR_FAKEROOT"))  PUT("ALR_FAKEROOT=%s", getenv("ALR_FAKEROOT"));
+    else if (cfg()->has_fakeroot)     PUT("ALR_FAKEROOT=%d", cfg()->fakeroot);
     /* ALR_LOG_FD is honoured from the caller when set, defaulting to 2.
      *
      * It used to be hardcoded to 2 here, and a harness that asked for fd 9 got
@@ -2109,6 +2428,7 @@ static void usage(void)
         "  exec [opts] -- <cmd> [args...]     run, with -- ending option parsing\n"
         "  shell [opts]                       interactive guest shell\n"
         "  update-components [<distro>]       refresh the guest preload copy\n"
+        "  config [get <k> | set <k> <v>]     settings and where they come from\n"
         "  version                            version and preload identity\n"
         "  doctor [probe-dir]                 device capability report\n"
         "\n"
@@ -2134,8 +2454,9 @@ int main(int argc, char **argv)
         if (n > 0) g_self[n] = '\0';
         else snprintf(g_self, sizeof g_self, "%s", argv[0]);
     }
-    if (!distro || !*distro) distro = "ubuntu-24.04";
+    if (!distro || !*distro) distro = cfg()->has_distro ? cfg()->distro : "ubuntu-24.04";
     if (getenv("ALR_LOG")) g_log = atoi(getenv("ALR_LOG"));
+    else if (cfg()->has_log) g_log = cfg()->log;
 
     while (i < argc && argv[i][0] == '-' && argv[i][1] != '\0') {
         if (!strcmp(argv[i], "-d") && i + 1 < argc) { distro = argv[++i]; i++; }
@@ -2185,6 +2506,8 @@ int main(int argc, char **argv)
         (void)parse_runopts(argc - i - 1, argv + i + 1, &ro, &distro, 0);
         return cmd_run(distro, 0, NULL, 1, &ro);
     }
+    if (!strcmp(argv[i], "config"))
+        return cmd_config(argc - i - 1, argv + i + 1);
     if (!strcmp(argv[i], "version") || !strcmp(argv[i], "--version"))
         return cmd_version();
     if (!strcmp(argv[i], "list"))

@@ -15,10 +15,11 @@ alr shell [옵션]                       게스트 로그인 셸 (기본 bash -l
 alr exec [옵션] -- <command> [args...] run과 동일하나 옵션 파싱 모호성 없음
 
 alr doctor [probe-dir]                 디바이스 능력 진단 (플래그 없음 — 아래 ⚠️)
-alr bench [--vs proot] [--json]        벤치마크
 alr version
-alr config get|set <key> [<value>]
+alr config [get <key> | set <key> <value>]
 ```
+
+> **`alr bench` 는 없다 — 서브커맨드가 아니라 디바이스 하네스다.** 벤치마크는 [`tests/device/bench.sh`](../tests/device/bench.sh) 와 `scripts/dev-push.sh bench` / `bench-ab` 가 들고 있고, 그 결과를 [`bench/regression_gate.py`](../bench/regression_gate.py) 가 기기별 baseline 과 대조한다. 유효한 측정은 **Termux 앱에서 fork 된 프로세스**를 요구하는데(uid ≥ 10000, `Seccomp: 2`) — `alr bench` 를 서브커맨드로 두면 그 조건을 만족하지 않는 곳에서 부를 수 있고, 그렇게 나온 숫자는 존재하지 않는 기기를 잰 것이다. [07 §4](07-acceptance.md) 가 하네스 쪽 계약이다.
 
 ### 1.1 `run` / `shell` / `exec` 공통 옵션
 
@@ -50,26 +51,51 @@ alr config get|set <key> [<value>]
 
 `$PREFIX/etc/alr/config.toml` (전역) → `$HOME/.alr/config.toml` (사용자) 순으로 병합.
 
+**우선순위**: 플래그 > 환경변수 > 사용자 설정 > 전역 설정 > 내장 기본값.
+
 ```toml
 default_distro = "ubuntu-24.04"
 
 [runtime]
-fakeroot   = true        # apt/dpkg에 필요
-supervisor = true        # false로 두지 말 것 — 부팅이 안 된다
-log        = 0
+fakeroot = true          # apt/dpkg에 필요
+log      = 0
 
 [paths]
-root = "$PREFIX/var/lib/alr"
-
-# [binds] 는 v1 에 없다 — §1.3 참조
-
-[env]
-# 게스트에 통과시킬 추가 변수
-passthrough = ["TERM", "COLUMNS", "LINES", "http_proxy", "https_proxy", "no_proxy"]
+root = "$PREFIX/var/lib/alr"   # 선행 $PREFIX만 전개된다
 
 [network]
-mirror = ""              # 비우면 tarball 기본값 사용 (권장)
+mirror = ""              # 비우면 cdimage.ubuntu.com 사용 (권장)
 ```
+
+| 키 | 대응 환경변수 | 내장 기본값 |
+|---|---|---|
+| `default_distro` | `ALR_DISTRO` | `ubuntu-24.04` |
+| `runtime.fakeroot` | `ALR_FAKEROOT` | `false` |
+| `runtime.log` | `ALR_LOG` | `0` |
+| `paths.root` | `ALR_ROOT_DIR` | `$PREFIX/var/lib/alr/distros` |
+| `network.mirror` | — | `https://cdimage.ubuntu.com/ubuntu-base/releases` |
+
+```
+$ alr config                       # 전 설정, 유효값, 그리고 출처
+$ alr config get runtime.fakeroot  # 유효값 하나만 (스크립트용)
+$ alr config set runtime.fakeroot true
+```
+
+**출처 열이 이 명령의 값어치다.** *"fakeroot 는 true"* 는 행동으로 옮길 수 없고, *"fakeroot 는 true, 환경변수에서"* 는 네 곳 중 어디를 고쳐야 하는지 알려 준다 — 설정 덤프를 읽는 사람이 실제로 묻는 질문이 그것이다.
+
+> ⚠️ **스키마가 이 문서의 이전 판보다 작다. 두 키를 실측으로 떨어냈다.**
+>
+> **`[env] passthrough`** — 이미 전부에 대해 참이다. `alr` 은 호스트 environ 을 blocklist 만 빼고 통째로 게스트에 복사한다(`src/cli/alr.c`). 그래서 "넘길 이름 목록" 은 넘기는 것을 늘리지 못하고 **줄이는 것밖에** 못 하는데, 그건 이 키의 뜻이 아니다. **어떤 결과도 바꿀 수 없는 키는 없는 것보다 나쁘다** — 조작 수단처럼 읽히기 때문이다.
+>
+> **`[runtime] supervisor`** — 이 문서가 스스로 붙여 둔 주석이 *"false 로 두지 말 것 — 부팅이 안 된다"* 였다. 기본값이 아닌 유일한 값이 이후 모든 실행을 깨뜨리는 **영속** 설정은 지뢰다. 한 번짜리 `--no-supervisor` 가 이미 있고 `reason=no-supervisor-requested` 로 자기를 알린다.
+>
+> **`[binds]`** 는 v1 에 없다 — [§1.3](#13-바인드-마운트는-v1에-없다) 참조.
+
+**모르는 키는 무시하지 않고 보고한다.** 오타 난 설정이 받아들여진 것처럼 보이는 것이 설정 파일의 대표적 실패 방식이다.
+
+**`alr config set` 은 사용자 파일만 고친다.** 전역 파일은 공유될 수 있고 이 명령이 다시 쓸 것이 아니다. 그리고 사용자 파일을 **새로 읽어서** 고친다 — `cfg()` 가 들고 있는 것은 두 파일이 **병합된** 결과라, 그걸 되쓰면 전역 설정 전부를 사용자 파일로 조용히 복사해 얼려 버린다.
+
+**주석은 보존되지 않는다.** 스키마가 닫혀 있고, 다섯 개 키를 위해 주석을 왕복시키려면 문서 모델 전체를 들고 있어야 한다. 쓴 파일의 첫 줄이 그렇게 적혀 있다.
 
 ## 3. `alr doctor`
 
