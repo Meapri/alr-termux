@@ -96,7 +96,7 @@ Termux를 한 번 실행해 부트스트랩이 풀리기를 기다린 뒤, 릴�
 ```bash
 # Termux 안에서. 인증 없이 그대로 동작한다 (익명 curl 로 검증).
 pkg install -y curl tar
-V=0.3.0        # src/common/alr_version.h 의 ALR_VERSION 과 같아야 한다
+V=0.4.0        # src/common/alr_version.h 의 ALR_VERSION 과 같아야 한다
 curl -fsSLO https://github.com/Meapri/alr-termux/releases/download/v$V/alr-$V-aarch64.tar.gz
 tar -C "$PREFIX" -xzf alr-$V-aarch64.tar.gz
 alr version
