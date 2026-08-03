@@ -31,7 +31,14 @@
 
 ### I2. 자체 seccomp 필터를 설치하지 않는다 (v1)
 
-**왜**: [§A3](01-platform-facts.md) — 완화는 구조적으로 불가능하고(TRAP이 ERRNO를 이긴다), 추가는 syscall당 ~24 ns를 더한다. 얻을 게 없다.
+**왜**: [§A3](01-platform-facts.md) — 완화는 구조적으로 불가능하다(TRAP이 ERRNO를 이긴다).
+
+**근거 정정 (2026-08-03).** 예전에 함께 적혀 있던 두 번째 이유 — "추가는 syscall당 ~24 ns를 더하니 얻을 게 없다" — 는 실측으로 무너졌다 ([ADR 0006](adr/0006-raw-syscall-binaries.md)).
+
+- **필터 평가 비용은 관측되지 않았다.** 같은 프로세스·같은 syscall 로 재보니 베이스라인 438 ns, `RET_ALLOW` 필터를 얹은 뒤 266 ns — 주파수 스케일링 잡음 범위다. "syscall 마다 비용이 붙는다"로 결정을 정당화하면 안 된다.
+- **"얻을 게 없다"도 틀렸다.** `SECCOMP_RET_USER_NOTIF`(0x7fc00000)는 zygote 의 `RET_ALLOW`(0x7fff0000)를 이긴다. 필터 설치가 `EPERM` 이던 것도 정책이 아니라 `no_new_privs=0` 때문이었고, 우리가 켜면 설치된다.
+
+그래도 v1 이 필터를 설치하지 않는 진짜 이유는 **알림 왕복이 154 µs**(베이스라인의 352배)라는 것이다. 경로 syscall 을 그렇게 가로채면 proot-distro 보다 느려진다 — 그 순간 이 제품의 존재 이유가 사라진다. ADR 0006 은 정적/raw-syscall 바이너리에 **한정한** 선택 적용을 미구현 상태로 열어 두었다. 그 예외 밖에서는 이 불변식이 그대로다.
 
 ### I3. 경로 재작성 규칙은 `src/common/alr_path_rule.h` 한 곳에만 있다
 
@@ -60,6 +67,18 @@
 ### I8. 성능 주장은 MEASURED만
 
 `relative_to_proot`는 실측 전까지 `PENDING_DEVICE`다. **속도 향상을 지어내지 않는다.**
+
+이 문장은 규칙이라 그대로 둔다([07-acceptance.md §4.3](07-acceptance.md), [00-product.md §6](00-product.md)과 같은 문장이다). 다만 **A/B 는 이미 돌았다.** 이 칸을 채울 일이 생기면 새 숫자를 만들지 말고 아래를 인용한다:
+
+| 워크로드 | alr | proot-distro | `relative_to_proot` |
+|---|---|---|---|
+| `git status` 10k 파일 (5회 중앙값) | 49 ms | 1,704 ms | **34.8×** |
+| 기동 `/bin/true` (9회 중앙값) | 28 ms | 304 ms | **10.9×** |
+| `npm ci` 105 패키지 (3회) | 2.00 s | 6.24–6.87 s | **3.12×** |
+
+출처: [M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md), [M12 §4](evidence/2026-08-03-m12-spawn-resolver.md).
+
+**세 줄 모두 참조 기기 #1(MediaTek MT8775) 단일 세션 값이다.** `git` 비교는 세 실행의 git 빌드가 다르고 proot 쪽 rootfs 도 달라 그만큼 약하다. `npm ci` 는 node 바이너리·락파일·캐시를 복사해 그 결함을 제거했지만 베이스 배포판이 다르다(alr 24.04 vs proot 26.04). 그래서 헤드라인은 M7/M8 이 정한 표현 — "동일 기기·동일 워크로드에서 `git status` 30배 이상, 기동 10배 이상, 단일 기기 1회 세션" — 을 넘지 않는다. 스냅드래곤 배수는 아직 아무 값도 없다.
 
 ### I9. permissive 디바이스의 측정은 무효
 
@@ -169,6 +188,18 @@ ssh -p 8022 localhost
 
 **"해봤더니 되더라"는 SOURCE가 아니다.** 특히 permissive 디바이스나 한 대의 디바이스에서만 확인한 것은 `PENDING_DEVICE`다.
 
+> **이 규칙은 지금 우리 자신에게 걸려 있다.** 2026-08-03 기준 이 저장소의 필드 증거는 전부 **참조 기기 #1 한 대**에서 나왔다 — MediaTek MT8775 / Android 16 / kernel 6.1.145-android14 / `getenforce=Enforcing` / `Seccomp: 2` ([브링업 기록](evidence/2026-08-02-device-bringup.md)).
+>
+> 규칙을 그대로 적용하면 셋으로 갈린다.
+>
+> - **부팅 여부와 execve 정책**은 `targetSdkVersion=28` 인 Termux 라는 조건에서 AOSP 정책이 정하는 것이라 기기를 넘어 유효하다고 볼 근거가 있다.
+> - **차단 syscall 집합은 아니다.** allowlist 는 릴리스마다 자랐고(android12 365줄 → android16 392줄), 이 기기에서 이미 **AOSP 유래 예측이 반증되었다** — `openat2`(437)·`faccessat2`(439) 를 차단으로 예측했는데 실측은 허용이었다([브링업 §P4](evidence/2026-08-02-device-bringup.md)). [§A6](01-platform-facts.md) 가 이 항목을 아직 열어 둔 이유가 그것이다.
+> - **성능 배수**도 아니다 — 이 기기의 값일 뿐이고, ptrace 왕복이 호출당 ≈167 µs 로 [§D1](01-platform-facts.md)의 5~20 µs 모델보다 훨씬 비싼 것이 이 기기/커널 특성일 가능성이 남아 있다([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)).
+>
+> 끝내는 데 필요한 측정도 **하나가 아니라 둘**이다. 성능 쪽은 다른 기기에서 같은 벤치를 재실행해 두 기기의 `relative_to_proot` 를 나란히 싣는 것이고, 호환성 쪽은 벤치가 아니라 **`alr doctor` 스윕을 다시 돌려 `src/supervisor/alr_sigsys_table.h` 의 ground truth 와 diff** 하는 것이다. diff 가 0이면 표를 상수로 취급할 수 있고, 아니면 표는 영구히 기기별 생성물로 남아야 한다([§A6](01-platform-facts.md)).
+>
+> 기기도 하나로는 부족하다 — [§A6](01-platform-facts.md) 는 **다른 OEM/SoC 한 대와 Android 12~15 한 대**를 각각 다른 질문에 요구한다. 오늘 막는 것은 그 두 대가 없다는 사실이다.
+
 ## 7. 하지 말아야 할 유혹들
 
 | 유혹 | 왜 안 되는가 |
@@ -179,8 +210,8 @@ ssh -p 8022 localhost
 | "user namespace를 한 번 더 시도해 보자" | `EINVAL`이다. 커널에 기능이 없다 ([§B4](01-platform-facts.md)) |
 | "Play Store Termux도 지원하자" | glibc를 로드할 로더가 없다 ([ADR 0005](adr/0005-play-store-unsupported.md)) |
 | "`/dev/full`을 `/dev/null`로 심링크하자" | ENOSPC 테스트가 조용히 통과해 버린다 |
-| "정적 바이너리도 후킹하자" | LD_PRELOAD가 원리적으로 불가능하다. `KNOWN_FAIL`로 분류하고 문서화한다 |
-| "Go 바이너리도 지원하자" | raw `svc`라 인터포즈 불가. `alr doctor` P11이 경고하는 것으로 충분하다 |
+| "정적 바이너리도 후킹하자" | LD_PRELOAD가 원리적으로 닿지 않는다 — codex 실측 확인(정적 musl, `alr preload:` 로그 0줄, [M12 §8](evidence/2026-08-03-m12-spawn-resolver.md)). `KNOWN_FAIL`로 분류하고 문서화한다. **단, 근거를 잘못 인용하지 말 것**: 가로채기 자체는 가능하다(seccomp USER_NOTIF). 비용이 154 µs/call 이라 안 하는 것이다 ([ADR 0006](adr/0006-raw-syscall-binaries.md)) |
+| "Go 바이너리도 지원하자" | raw `svc`라 인터포즈 불가. `alr doctor` P11이 경고하는 것으로 충분하다. 26.04 의 uutils coreutils 도 같은 부류다(inline `svc` 74개 실측, [M15](evidence/2026-08-03-m15-cmdline-2604.md)) — 그래서 26.04 는 v1 대상이 아니다 |
 | "acceptance를 SKIP으로 바꿔 넘어가자" | `SKIP`은 "이 환경에 해당 없음"이지 "아직 못 고침"이 아니다. 후자는 `KNOWN_FAIL:<reason>` |
 
 ## 8. 상위 프로젝트 참조 규칙
@@ -202,3 +233,5 @@ ssh -p 8022 localhost
 ```
 
 3번만 있고 1번이 없으면 grun의 열등한 복제품이다. 1번만 있고 3번이 없으면 proot-distro의 복잡한 복제품이다. **둘 다여야 한다.**
+
+> **4번의 `codex` 를 과대 해석하지 않는다.** codex 릴리스는 정적 musl 링크라 `LD_PRELOAD` 가 로드조차 되지 않는다. 실행은 되지만 경로 가상화가 전혀 걸리지 않아 rootfs 가 아니라 Android 파일시스템을 본다 ([M12 §8](evidence/2026-08-03-m12-spawn-resolver.md)). `ALR CODEX VERSION: PASS` 는 "바이너리가 뜬다"까지이지 "게스트 안에서 동작한다"가 아니다. 4번을 다 채웠다고 말하려면 codex 가 동적 링크로 바뀌거나 ADR 0006 의 선택 적용이 구현되어야 한다.

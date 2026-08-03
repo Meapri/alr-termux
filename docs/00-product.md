@@ -6,7 +6,21 @@
 
 ## 2. 타깃
 
-- **디바이스**: Snapdragon arm64, Android 12–16. (참조 디바이스 1대 이상을 Android 12대, 1대 이상을 Android 15/16대로 확보할 것 — seccomp allowlist가 릴리스마다 다르다.)
+- **디바이스**: arm64. **검증된 것은 아래 한 칸뿐이다.**
+
+| | 상태 |
+|---|---|
+| MediaTek MT8775, Android 16 (커널 `6.1.145-android14`) | **검증됨.** 이 문서의 모든 실측 수치가 나온 유일한 기기 |
+| Snapdragon (전 릴리스) | **미검증.** 기기 없음 |
+| Android 12 / 13 / 14 / 15 | **미검증.** 기기 없음 |
+
+> ⚠️ **이 표의 빈칸이 v1 의 가장 큰 미해결 항목이다.** 기능 결함이 아니라 커버리지 결함이며, 코드로 메울 수 없다.
+>
+> 왜 릴리스마다 재야 하는가: 이 설계의 근간이 zygote seccomp allowlist 인데 **그것이 릴리스마다 다르다**(android12 365줄 → android16 392줄, [§A6](01-platform-facts.md)). 한 릴리스에서 통과한 syscall 집합이 다른 릴리스에서 같다는 보장이 없다. 즉 "Android 16 에서 96/96" 은 "Android 12 에서도 될 것" 을 **뜻하지 않는다.**
+>
+> 벤더 차이도 같은 이유로 미지수다 — SoC 자체보다 OEM 이 커널·정책에 무엇을 얹었는지가 갈린다.
+>
+> **따라서 현재 정직한 지원 선언은 "Android 16 / MediaTek 1대에서 검증" 이다.** Snapdragon 을 주 타깃으로 적어 두었던 이전 문구는 측정을 앞선 주장이었으므로 철회한다. 다른 기기에서 처음 할 일은 `alr doctor` 로 [§A6](01-platform-facts.md) 의 차단 목록을 다시 뽑는 것이다.
 - **호스트**: Termux **F-Droid / GitHub 빌드** (`targetSdkVersion=28`). Play Store 빌드는 **v1 미지원** (ADR 0005).
 - **게스트**: Ubuntu 24.04 (noble) arm64, glibc 2.39, `ports.ubuntu.com` 아카이브. Debian bookworm/trixie는 v1.1 목표.
 - **워크로드**: `git`, `node`(및 npm/npx), `codex`, `bash`, `apt`/`dpkg`, 일반 coreutils/빌드 툴체인.

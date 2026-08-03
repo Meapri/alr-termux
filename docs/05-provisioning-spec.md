@@ -170,14 +170,26 @@ Ubuntu 24.04 아카이브의 nodejs는 **18.19.1 (EOL)**. 반면:
 
 **Codex의 Linux 샌드박스는 반드시 꺼야 한다** — Landlock과 bubblewrap이 Android 앱 프로세스에서 동작하지 않는다 ([§D4](01-platform-facts.md)).
 
-`<R>/root/.codex/config.toml`:
+`<R>/root/.codex/config.toml` — `with_codex()`가 **오늘 실제로 쓰는** 내용 (`src/cli/alr.c`):
 ```toml
-# alr: Landlock/bubblewrap이 Android 앱 프로세스에서 동작하지 않아 샌드박스를 끈다.
-# 정확한 키 이름은 디바이스에서 `codex --help` 로 확인 후 확정할 것 (PENDING_DEVICE).
+# alr: Codex's Linux sandbox relies on Landlock and bubblewrap,
+# neither of which functions inside an Android app process.
+# Confirm the exact mode name with `codex --help` for your version.
 sandbox_mode = "danger-full-access"
 ```
 
-> ⚠️ **PENDING_DEVICE**: 2026년 시점의 정확한 설정 키/플래그 철자를 확인하지 못했다. M7에서 디바이스의 `codex --help`로 확정하고 이 문서를 갱신한다. 확정 전까지 값을 추측해 하드코딩하지 말 것.
+> ⚠️ **PENDING_DEVICE 유지 — 다만 절반은 확정됐다.**
+>
+> **확정된 것**: 디바이스에서 `codex --help`를 실제로 돌렸다 ([M7 실측](evidence/2026-08-02-m7-m8-workloads-perf.md), `codex-cli 0.146.0`). CLI 플래그는 **`-s, --sandbox <SANDBOX_MODE>`** 이고, 도움말에 나온 설정 키는 `sandbox_permissions` 였다.
+>
+> **확정되지 않은 것**: `<SANDBOX_MODE>`가 받는 값의 목록, 그리고 `sandbox_mode`가 유효한 TOML 키인지. 즉 위 블록의 `sandbox_mode = "danger-full-access"` 두 토큰은 **어느 쪽도 도움말로 뒷받침되지 않았다 — `UNVERIFIED`**. 설치는 성공하고 alr이 `alr: NOTE codex sandbox disabled` 를 찍지만, 그 NOTE는 **파일을 썼다**는 보고이지 codex가 그 파일을 읽고 샌드박스를 껐다는 증거가 아니다.
+>
+> **게다가 이 파일의 경로 자체가 의심스럽다.** codex는 정적 링크 musl 바이너리라 `LD_PRELOAD`가 원리적으로 닿지 않고, 모든 경로 연산이 rootfs가 아니라 Android 파일시스템으로 간다 ([M12 §8](evidence/2026-08-03-m12-spawn-resolver.md)). alr은 게스트에 `HOME=/root`를 넣지만(`src/cli/alr.c`), 가상화가 없는 codex에게 `/root`는 **rootfs 안이 아니라 Android의 `/root`** 다. 그렇다면 codex가 여는 `~/.codex/config.toml`은 우리가 쓴 `<R>/root/.codex/config.toml`이 아니다. 기동 시 매번 나오는 `could not create PATH aliases: Read-only file system` 이 같은 방향을 가리킨다. **codex가 실제로 어느 파일을 열었는지는 관측된 적이 없다 — `UNVERIFIED`.**
+>
+> **무엇이 이걸 끝내는가**: 한 세션에서 두 가지를 잡으면 닫힌다. (1) `--sandbox`에 없는 값을 줘서 나오는 오류 메시지나 도움말에서 **허용 모드 값 목록을 그대로 캡처**한다. (2) 같은 실행을 `strace -f -e trace=openat` 아래 돌려 codex가 여는 `config.toml`의 **절대 경로**를 본다.
+> **무엇이 막고 있는가**: 우리 계측이 구조적으로 눈이 멀었다 — `ALR_LOG`는 preload 안에 있고 preload는 codex에 로드되지 않는다([M12 §8](evidence/2026-08-03-m12-spawn-resolver.md), `grep -c 'alr preload:'` = 0). 그래서 외부 관찰자(strace)가 필요하고, 값 목록도 도움말 전문을 뜬 기록이 아직 없다.
+>
+> 확정 전까지 값을 추측해 하드코딩하지 말 것 — **지금 코드가 쓰는 값도 추측이며**, 위에 그렇게 표시해 두었다. 확정되면 파일보다 **`--sandbox <MODE>` 플래그**로 옮기는 편이 낫다: argv는 정적 링크 바이너리에도 우리가 그대로 전달하는 유일한 통로다.
 
 > ⚠️ **보안 고지**: Codex 샌드박스를 끄면 alr이 에이전트와 사용자 디바이스 사이의 유일한 방어선이 된다. `alr`은 보안 경계가 **아니다** ([00-product.md §5](00-product.md)). 이 사실을 설치 시 사용자에게 명시적으로 알린다.
 
@@ -185,7 +197,15 @@ sandbox_mode = "danger-full-access"
 
 `apt`/`dpkg` 호출은 `ALR_FAKEROOT=1`로 실행한다. 비루트에서 `chown`/`mknod`가 `EPERM`이므로 필수다.
 
-> **M6 결정 사항**: Android seccomp가 SysV IPC를 막지 않는다면 (`alr doctor` P2가 답한다) **업스트림 `fakeroot` 패키지를 그냥 쓰는 것**이 자체 shim보다 낫다. 자체 shim은 유지보수 부채다. A/B로 결정한다.
+> **M6 결정 사항 — 종결: 자체 shim을 유지한다.** 원래의 A/B("SysV IPC가 안 막혀 있으면 업스트림 `fakeroot` 패키지를 그냥 쓴다")는 **전제가 무너져 성립하지 않는다.**
+>
+> 2026-08-03 레퍼런스 디바이스(MediaTek MT8775 / Android 16 / kernel 6.1.145-android14, uid≥10000, `Seccomp: 2`)에서 게스트의 `shmget`·`semget`·`msgget`이 **전부 `ENOSYS`** 로 돌아왔고, 같은 실행의 `ALR_LOG`에 슈퍼바이저가 이 셋에 대한 SIGSYS 트랩 **3건을 에뮬레이션**한 기록이 남았다. `ENOSYS`가 커널의 대답이 아니라 **차단 후 우리 슈퍼바이저의 대답**이라는 뜻이다 — SysV IPC는 zygote 블록리스트에 있고 게스트에서 **쓸 수 없다**.
+>
+> 업스트림 `fakeroot`의 기본 변종은 `faked` 데몬 + SysV 메시지큐로 동작한다([02-architecture.md §120](02-architecture.md)이 바로 그것을 대체한다고 적은 그 구조다). 따라서 이 디바이스에서는 동작할 수 없다. 유지보수 부채를 감수하고 mmap DB shim을 계속 쓴다.
+>
+> 곁가지 하나: 업스트림에는 SysV 대신 소켓을 쓰는 `fakeroot-tcp` 변종이 있다. 깔아본 적도 재본 적도 없다 — `UNVERIFIED`, 현재 추진하지 않는다.
+>
+> 근거: [M16 §1](evidence/2026-08-03-m16-ipc-audit.md) (프로브 소스 `tests/device/probe_ipc.c`). 같은 질문을 열어 둔 [RISKS R9](RISKS.md)와 [02-architecture.md §121](02-architecture.md)도 같은 답으로 닫힌다.
 
 ## 6. 재설치 / 삭제 / 목록
 

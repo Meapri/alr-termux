@@ -19,6 +19,45 @@ M0 스캐폴딩
 
 ---
 
+> **진행 상황** (2026-08-03) — 아래 2026-08-02 기록은 **그대로 둔다**. 그날 참이었던 것이고, 뒤집힌 항목만 여기서 정정한다.
+> - **M6 의 "결정 사항" 두 개가 모두 답을 얻었다.** SysV IPC 는 **막힌다** — `shmget`/`semget`/`msgget` 이
+>   전부 `ENOSYS` 이고, `ALR_LOG=2` 가 슈퍼바이저의 SIGSYS 에뮬레이션 3건을 보여준다(즉 zygote 필터의
+>   `RET_TRAP`) [M16 §1](evidence/2026-08-03-m16-ipc-audit.md). 따라서 **업스트림 `fakeroot`(SysV 변종)
+>   분기는 닫히고 자체 shim 을 유지한다.** `link(2)` 는 `EACCES` 이므로 link2symlink 계층도 끄지 않는다
+>   ([브링업 P6](evidence/2026-08-02-device-bringup.md)). 아래 §M6 참조.
+> - **M4/M5 의 잔여 목록이 닫혔다.** `mkstemp` 계열·`dlopen` 은 M6 경로에서, 절대 심링크 상대화는
+>   [M10](evidence/2026-08-02-m10-apt-install-git.md), exec 진입점 13개 중 없던 6개
+>   (`posix_spawn` 계열·`system`/`popen`/`fexecve`/`execveat`)는
+>   [M12 §1](evidence/2026-08-03-m12-spawn-resolver.md), `/proc/self/cmdline` 합성은
+>   [M15 §1](evidence/2026-08-03-m15-cmdline-2604.md). 심볼 정본 `wrappers.def` 와 그것을 읽는 게이트는
+>   [M13](evidence/2026-08-03-m13-symbol-gate.md) — **만들자마자 누락 심볼 24개가 나왔다.**
+> - **M7 은 git/node 로는 통과, codex 때문에 미완이다.** `npm ci` A/B(동일 node 바이너리·락파일·캐시):
+>   proot-distro **6.25 s** vs alr **2.00 s** = **3.12×** [M12 §4](evidence/2026-08-03-m12-spawn-resolver.md).
+>   codex 는 **정적 링크 musl** 이라 `LD_PRELOAD` 가 로드조차 되지 않는다 →
+>   `ALR CODEX LINKAGE: KNOWN_FAIL:static-unhooked`. 아래 §M7 이 이것을 자세히 적는다.
+> - **M8 성능은 실측 완료.** `git status`(10k 파일) native 42 / alr 49 / proot-distro **1,704 ms** → **34.8×**,
+>   기동 native 24 / alr 28 / proot **304 ms** → **10.9×**. 경로 계층 자체는 호출 9,912회 중 **재작성 26회,
+>   합계 ≈ 40 µs** ([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)). `path_traps=0 syscall_stops=0` 유지.
+>   **남은 것은 셋이다**: auditallow 볼륨(R6), 그리고 하네스가 없어 아직 `PENDING_DEVICE` 인
+>   `ALR BENCH NODE COLD vs PROOT` · `ALR BENCH EXEC THROUGHPUT` 두 줄
+>   ([07-acceptance.md §2 M8](07-acceptance.md)). 즉 **M8 의 Exit 은 아직 충족되지 않았다** — 히어로 벤치
+>   숫자가 나왔다는 것과 마일스톤이 끝났다는 것은 다르다. 사유는 아래 §M8.
+> - **ioctl §11 은 전제가 반증된 채로 끝났다.** PTY ioctl 인구조사 실측: `TCGETS` `TCSETS` `TIOCGWINSZ`
+>   `TIOCSWINSZ` **`FIONREAD`** `TIOCOUTQ` 는 그냥 허용된다 — §11 이 "가장 중요" 로 꼽아 에뮬레이션을
+>   요구했던 `FIONREAD` 가 필요 없었다. 거부되던 `TCGETS2` `TIOCGSID` `TIOCGETD` `TIOCEXCL` 은 번역했고
+>   `TIOCSTI` 는 의도대로 계속 거부한다 ([M14 §1](evidence/2026-08-03-m14-ioctl-php.md)).
+> - **Ubuntu 26.04 는 v1 대상이 아니다 — 비목표.** `/proc/self/cmdline`·`--argv0` 수정 후 26.04 는 부팅하지만
+>   **uutils coreutils 가 inline `svc` 74개**로 syscall 을 직접 내므로(정상 Rust 바이너리 0, GNU coreutils 0)
+>   `ls`/`cat`/`echo` 가 통째로 안 된다 ([M15](evidence/2026-08-03-m15-cmdline-2604.md)).
+>   가로챌 방법은 **있다** — seccomp user notification 은 `no_new_privs` 만 켜면 동작한다 — 그러나
+>   가로채기 왕복이 **154 µs/syscall**(베이스라인 438 ns)이라 비용으로 기각했다. 필터 *평가* 자체는 공짜이고,
+>   값싼 대안인 arm64 `PR_SET_SYSCALL_USER_DISPATCH` 는 이 커널(6.1.145-android14)에 없다.
+>   [ADR 0006](adr/0006-raw-syscall-binaries.md).
+> - **M10~M16 은 이 문서의 마일스톤이 아니다.** `docs/evidence/` 의 라운드 번호일 뿐이다 —
+>   설치 재현성(M10), 호환성 폭(M11), spawn·리졸버(M12), 심볼 게이트(M13), ioctl·php(M14),
+>   cmdline·26.04(M15), IPC·audit(M16). 여기 M0~M9 의 구조를 바꾸지 않고 증거로만 연결한다.
+> - **다음: auditallow 볼륨을 외부 adb 관찰자로 측정 → codex 샌드박스 키 확정 → M9 배포 → 스냅드래곤 재측정.**
+>
 > **진행 상황** (2026-08-02)
 > - **M-1 기기 브링업 — 완료.** [evidence/2026-08-02-device-bringup.md](evidence/2026-08-02-device-bringup.md). `alr doctor` VERDICT READY, FATAL 0.
 > - **M0 스캐폴딩 — 완료.** `Makefile`, `scripts/dev-push.sh`, `scripts/dev-bootstrap.md`.
@@ -89,7 +128,8 @@ ALR PRELOAD GLIBC FLOOR 2.17: PASS
 
 **산출물**
 - `src/common/alr_path_rule.h` — **Linux 헤더를 include하지 않는다.** 정규화 + guest→host 변환 + host→guest 역변환. `..`는 루트에서 클램프.
-- `src/common/alr_config.{h,c}` — `alr-config-v1` 탭 구분 + `%XX` 이스케이프 + FNV-1a 체크섬
+- ~~`src/common/alr_config.{h,c}` — `alr-config-v1` 탭 구분 + `%XX` 이스케이프 + FNV-1a 체크섬~~
+  → **만들지 않았다. 비목표** (아래 Exit 주석)
 - `src/common/alr_elf.{h,c}` — ELF64 aarch64 헤더 리더, `PT_INTERP` 추출, static/dynamic 분류
 - `src/common/alr_exec_rule.{h,c}` — 순수 결정 커널: `decide_exec_path_mediation`, `decide_exec_envp_injection`, `path_under`, `colon_list_contains`, `split_env_entry`, shebang 파서
 - `tests/cases/paths.tsv` — `(ALR_ROOT, input, expected)` 공유 테이블
@@ -100,10 +140,12 @@ ALR PRELOAD GLIBC FLOOR 2.17: PASS
 ALR PATH RULE HOST TESTS: PASS   (63 tsv cases, 73 assertions)
 ALR ELF CLASSIFY:         PASS
 ALR EXEC RULE TESTS:      PASS   (44 assertions)
-ALR CONFIG ROUNDTRIP:     DEFERRED -> M2
+ALR CONFIG ROUNDTRIP:     SKIP   — 비목표, 컴포넌트 자체가 없다 (아래 주석)
 ```
 
-> `alr_config`(`alr-config-v1` 직렬화)는 **M2로 미뤘다.** 상위 프로젝트는 execve를 넘어 상태를 넘기려고 이 포맷이 필요했지만, 이 설계는 env 변수(`ALR_ROOT`/`ALR_GUEST_EXE`/`LD_PRELOAD`)로 직접 넘긴다([02-architecture.md §6](02-architecture.md)). 슈퍼바이저가 체크섬 있는 핸드오프를 실제로 요구할 때 만든다 — 쓰이지 않을 포맷을 미리 구현하지 않는다.
+> `alr_config`(`alr-config-v1` 직렬화)는 **M2로 미뤘었다.** 상위 프로젝트는 execve를 넘어 상태를 넘기려고 이 포맷이 필요했지만, 이 설계는 env 변수(`ALR_ROOT`/`ALR_GUEST_EXE`/`LD_PRELOAD`)로 직접 넘긴다([02-architecture.md §6](02-architecture.md)). 슈퍼바이저가 체크섬 있는 핸드오프를 실제로 요구할 때 만든다 — 쓰이지 않을 포맷을 미리 구현하지 않는다.
+>
+> **정정 (2026-08-03)**: M2 는 기기에서 12/12 PASS 로 끝났고 그 포맷을 **한 번도 요구하지 않았다.** `src/common/` 에 `alr_config.{h,c}` 는 존재하지 않는다. 따라서 이 항목은 "M2 로 미룬 것"이 아니라 **필요해질 때까지 비목표**다 — 마일스톤을 붙잡아 두는 미완 항목으로 세지 않는다. 되살릴 조건은 위와 같다: env 변수로 못 넘기는 상태가 실제로 생길 때.
 
 **양쪽 실행 결과가 동일해야 한다** (이것이 M1의 진짜 검증):
 ```
@@ -199,6 +241,14 @@ ALR GUEST GLIBC VERSION: 2.39
 PRELOAD RW ABS COST: <= 100 ns/op
 PRELOAD RW REL COST: <= 20 ns/op
 ```
+> **MEASURED — 게이트 통과.** abs **61.0 ns** / rel **3.9 ns** / sysdir **13.8 ns**
+> ([M4/M5](evidence/2026-08-02-m4-m5-path-exec.md)). 실사용 분포까지 재 보면 `git status` 10k 에서
+> 호출 9,912회 중 **재작성은 26회(0.26%)**, 나머지 99.7% 는 상대경로라 첫 바이트 검사로 끝난다 —
+> 경로 계층 총비용 **≈ 40 µs**, 모델(0.82 ms)보다 20배 싸다
+> ([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)). `p[0] != '/'` 를 첫 줄에 둔 판단이 여기에 있다.
+> `/proc/self/cmdline` 가상화([04-preload-spec.md §7](04-preload-spec.md))는 스펙이 요구했는데 구현된 적이
+> 없었고 — 그동안 게스트의 `cmdline` 이 로더 호출과 호스트 경로를 통째로 노출했다 —
+> [M15 §1](evidence/2026-08-03-m15-cmdline-2604.md) 에서 닫혔다.
 
 **주의**
 - **`p[0] != '/'` 검사가 함수의 첫 줄이어야 한다.** git이 상대경로를 많이 쓴다.
@@ -225,6 +275,12 @@ PRELOAD RW REL COST: <= 20 ns/op
 
 **Exit**: [07-acceptance.md §2 M5](07-acceptance.md) 전부
 
+> **경고의 실증 (2026-08-03)**: "13개를 전부 한다"를 지키지 않았다. **구현되어 있던 것은 7개뿐이었고**
+> `posix_spawn` `posix_spawnp` `system` `popen` `pclose` `fexecve` `execveat` 이 없었다. 그동안 `make` 가 통째로
+> 깨져 있었는데 **아무 테스트도 그것을 알려주지 않았다** — breadth 의 `build-essential` 검사가 `sh -c` 로
+> 부르는 경로였기 때문이다. [M12 §1](evidence/2026-08-03-m12-spawn-resolver.md) 에서 메웠고,
+> 심볼 정본과 게이트는 [M13](evidence/2026-08-03-m13-symbol-gate.md) 에서 만들었다(만들자 24개가 더 나왔다).
+
 **주의**
 - **13개를 전부 한다.** 하나라도 빠지면 그 경로의 자식이 `ENOENT`로 죽고, 디버깅이 매우 어렵다.
 - shebang 재귀 깊이 상한 4.
@@ -247,9 +303,25 @@ PRELOAD RW REL COST: <= 20 ns/op
 
 **Exit**: [07-acceptance.md §2 M6](07-acceptance.md) 전부
 
-**결정 사항 (이 마일스톤에서 답한다)**
-- `alr doctor` P2가 SysV IPC를 허용한다고 답하면, **업스트림 `fakeroot` 패키지를 그대로 쓰는 것**과 자체 shim을 A/B로 비교한다. 자체 shim은 유지보수 부채이므로 업스트림이 동작하면 그쪽을 택한다.
-- P6이 `link(2)` 성공을 보고하면 **link2symlink 계층 전체를 끈다.** 불필요한 복잡도이자 버그 표면이다.
+**결정 사항 — 둘 다 답이 나왔다 (2026-08-03). 더 이상 미결이 아니다.**
+- ~~SysV IPC 를 허용하면 업스트림 `fakeroot` 를 쓴다~~ → **허용되지 않는다. 자체 shim 을 유지한다.**
+  게스트에서 `shmget`/`semget`/`msgget` 이 전부 **`ENOSYS`** 를 돌려주고, 같은 실행의 `ALR_LOG=2` 가
+  IPC 3건에 대한 슈퍼바이저 SIGSYS 에뮬레이션을 보여준다 — 즉 세 syscall 모두 **zygote 필터의
+  `SECCOMP_RET_TRAP`** 에 걸린다 ([M16 §1](evidence/2026-08-03-m16-ipc-audit.md)).
+  이 결정의 전제("막지 않는다면")가 반증되었으므로 **업스트림 `fakeroot`(SysV 변종) 분기는 닫힌다.**
+  현재의 `ALR_FAKEROOT=1` 인프로세스 신원 사칭을 유지한다.
+  > 대가는 정직하게 적는다: SysV IPC 를 쓰는 소프트웨어(일부 DBMS, X11 MIT-SHM)는 게스트에서 동작하지 않는다.
+  > 대상 워크로드 중 쓰는 것이 없어 영향이 제한적일 뿐이다. `ENOSYS` 는 라이브러리들이 폴백 경로를 타게 하는
+  > 표준 신호이기도 하다.
+  > 남은 갈래 하나 — Debian/Ubuntu 의 `fakeroot` 가 SysV 를 쓰지 않는 **TCP 변종(`fakeroot-tcp`)** 도 함께
+  > 배포한다고 알려져 있으나 **이 저장소가 확인한 사실이 아니다(UNVERIFIED)**. 게스트에서
+  > `fakeroot-tcp -- dpkg --unpack` 한 번이면 판정된다. 자체 shim 의 유지보수 부채가 커질 때 재검토할
+  > 값어치가 있는 갈래이지, 위 결정이 미결이라는 뜻은 아니다.
+- ~~P6 이 `link(2)` 성공을 보고하면 link2symlink 를 끈다~~ → **`EACCES` 였다. 끄지 않는다.**
+  브링업의 doctor P6 실측 ([evidence/2026-08-02-device-bringup.md](evidence/2026-08-02-device-bringup.md),
+  [ADR 0004](adr/0004-link2symlink.md)). 단 구현은 ADR 0004 의 shadow-file 전면 구현이 아니라
+  **inode 동일성만 만족시키는 복사 폴백 + `st_dev`/`st_ino` 테이블**이다 — 호출자가 실제로 검사하는 것이
+  그것 하나였기 때문 ([M6](evidence/2026-08-02-m6-package-manager.md)).
 
 **주의**
 - fakeroot와 preload의 **심볼 분할이 load-bearing 계약**이다 ([02-architecture.md §4.4](02-architecture.md)). 공유 심볼(`stat` 계열, `chown`/`chmod`/`mknod` 계열)은 fakeroot가 바인딩을 이기되 **경로를 재작성하지 않고** `dlsym(RTLD_NEXT)`로 preload에 체인한다. 이걸 종단 처리로 만들면 `--fakeroot`(기본 켜짐)에서 모든 `chown`/`chmod`가 재작성 안 된 경로로 나가 `ENOENT`가 된다.
@@ -273,9 +345,41 @@ PRELOAD RW REL COST: <= 20 ns/op
 | `ALR NODE FS STAT` | `syscall()` 인터포즈 |
 | `ALR NODE IO_URING SURVIVE` | 슈퍼바이저 SIGSYS 구제 (Node 22로 테스트) |
 
-**Codex 관련 미결 항목** (`PENDING_DEVICE`)
-- 2026년 시점 Codex의 정확한 샌드박스 비활성화 키/플래그를 `codex --help`로 확인하고 [05-provisioning-spec.md §5.2](05-provisioning-spec.md)를 갱신한다. **추측해서 하드코딩하지 말 것.**
-- Codex가 `rustix` 크레이트의 raw-syscall 백엔드를 쓰는지 확인한다. 쓴다면 libuv와 똑같이 계층을 우회한다.
+**Codex 관련 항목** — 하나는 답이 나왔고(우려보다 나쁘다), 하나는 아직 남았다
+
+- ~~Codex가 `rustix` 크레이트의 raw-syscall 백엔드를 쓰는지 확인한다~~
+  → **답: 백엔드를 볼 필요조차 없다. 더 나쁘다.** ([RISKS R7](RISKS.md) 해소)
+  배포되는 `codex-aarch64-unknown-linux-musl` 은 **정적 링크 바이너리**다 — `INTERP` 프로그램 헤더도
+  `NEEDED` 엔트리도 없다. 따라서 raw syscall 이든 libc 래퍼든 무관하게 **`LD_PRELOAD` 가 애초에 로드되지
+  않는다**(`ALR_LOG=2` 에서 `alr preload:` 줄이 codex 는 0, 대조군 git 은 1).
+  codex 의 모든 경로 연산은 rootfs 가 아니라 **Android 파일시스템**으로 간다
+  ([M12 §8](evidence/2026-08-03-m12-spawn-resolver.md)).
+  → **`ALR CODEX VERSION: PASS` 는 "바이너리가 실행된다"는 뜻이지 "게스트 안에서 동작한다"는 뜻이 아니다.**
+  수용 테스트는 이 상태를 `ALR CODEX LINKAGE: KNOWN_FAIL:static-unhooked` 로 추적한다 — 향후 동적 빌드가
+  나오면 자동으로 뒤집힌다. 대응 선택지(정적 바이너리 일반)는 [ADR 0006](adr/0006-raw-syscall-binaries.md).
+
+- 샌드박스 비활성화 키 — **절반은 측정됐고, 절반은 `PENDING_DEVICE` 로 남는다** ([RISKS R8](RISKS.md))
+  - **MEASURED**: 기기에서 `codex --help` 를 돌려 **`-s, --sandbox <SANDBOX_MODE>` 플래그**와 설정 키
+    `sandbox_permissions` 의 존재를 확인했다 ([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)).
+  - **아직 아닌 것**: `alr install --with codex` 가 실제로 쓰는 것은 `<R>/root/.codex/config.toml` 에
+    적는 **`sandbox_mode = "danger-full-access"`** 이고(`src/cli/alr.c` `with_codex()`), 이 **키 이름과
+    모드 문자열은 `--help` 출력으로 대조된 적이 없다.** 소스의 주석도 아직 "확인하라"로 남아 있다.
+    설치 시 `alr: NOTE codex sandbox disabled; alr is not a security boundary` 를 출력하는 부분만 구현됐다.
+  - **더 큰 문제 (UNVERIFIED)**: 위 항목대로 codex 는 후킹되지 않는데 `alr` 은 게스트에 `HOME=/root` 를
+    준다(`src/cli/alr.c`). 후킹되지 않은 프로세스에게 `/root/.codex/config.toml` 은 rootfs 안이 아니라
+    **Android 의 `/root`** 다. 즉 **우리가 쓴 설정 파일을 codex 가 읽고 있지 않을 가능성이 높다.**
+    설치 시 codex 가 내는 `could not create PATH aliases: Read-only file system` 경고가 같은 방향을
+    가리키지만, 이것으로 읽기 여부를 단정할 수는 없다.
+  - **무엇이 이것을 끝내는가**: 기기에서 (1) `codex --help` 의 키/모드 철자를 **그대로 받아 적고**,
+    (2) 그 경로에 고의로 망가뜨린 TOML 을 두어 codex 가 **불평하는지**로 파일을 실제로 읽는지 판정하고,
+    (3) 읽지 않으면 설정 파일 대신 `--sandbox` 플래그를 넘기도록 `with_codex()` 를 고친다.
+    그 뒤 [05-provisioning-spec.md §5.2](05-provisioning-spec.md) 를 갱신한다.
+  - **무엇이 막고 있는가**: 디바이스 세션 하나. **추측해서 하드코딩하지 말 것** — 지금 값이 바로 그 추측이고,
+    그래서 (2)가 (1)보다 먼저 필요할 수도 있다.
+
+> **따라서 M7 은 완료가 아니다** ([00-product.md §6](00-product.md) 규칙 3). git·node·npm 쪽은 전부 PASS 이고
+> `npm ci` 3.12× 까지 실측됐지만, codex 는 `KNOWN_FAIL:static-unhooked` 이고 `ALR CODEX SANDBOX DISABLED` 는
+> 위 이유로 판정되지 않았다. **codex 를 "실사용 가능" 으로 적지 않는다.**
 
 ---
 
@@ -289,16 +393,41 @@ PRELOAD RW REL COST: <= 20 ns/op
 - `bench/regression_gate.py`
 - 참조 디바이스에서 측정한 리포트 (Android 12대 1종 + 15/16대 1종)
 
+> **현재 상태 (2026-08-03) — 숫자는 나왔지만 하네스는 아직 없다.**
+> 위 배수(34.8× / 10.9× / 3.12×)는 **수동 실행**으로 쟀다
+> ([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md), [M12 §4](evidence/2026-08-03-m12-spawn-resolver.md)).
+> `src/cli/alr.c` 에 `bench` 서브커맨드가 없고 `bench/regression_gate.py` 도 없다 — `bench/` 에는
+> `microbench/rw_cost.c` 와 `microbench/notif_cost.c` 뿐이고, 폭 측정은 `tests/device/breadth.sh` 다.
+> 기기도 **MediaTek MT8775 / Android 16 한 대뿐**이라 "Android 12대 1종" 은 측정되지 않았다.
+> **산출물 4줄 중 아래 3줄(`alr bench`, `regression_gate.py`, 2기종 리포트)이 미달**이며, 그렇게 센다 —
+> 숫자가 있다는 것과 아무나 재현할 수 있다는 것은 다르다.
+
 **Exit**: [07-acceptance.md §2 M8](07-acceptance.md) + 다음
 ```
 ALR MEDIATION INVARIANT: path_traps=0 syscall_stops=0
 ```
+> `ALR MEDIATION INVARIANT` 는 **MEASURED — PASS**. `git status` 10k 실행에서
+> `pids=21 sigsys=22 emulated=22 path_traps=0 syscall_stops=0`
+> ([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)). PRoot 와 갈리는 불변식이 실측에서도 성립한다.
 
 **주의**
 - **`getenforce`/`Seccomp:` 검증 없이 결과를 발표하지 않는다.**
 - PRoot 베이스라인을 하나로 고정한다 (`PROOT_NO_SECCOMP=1`과 기본값을 한 차트에 섞지 말 것).
 - 목표 배수는 [00-product.md §4](00-product.md)의 방어 가능한 범위 안이어야 한다. 넘으면 측정이 틀렸거나 베이스라인이 잘못된 것이다.
-- **auditallow 로그 볼륨을 측정한다** ([07-acceptance.md §6](07-acceptance.md)). 이것이 숨은 지배 비용일 수 있다.
+  > **정정 (2026-08-03)**: `git status` 는 실제로 넘었다 — §4 의 1.5~4× 추정에 대해 실측 **34.8×**.
+  > 재검토 결과 틀린 것은 측정이 아니라 추정 쪽이었다("PRoot 는 필터 테이블의 syscall 만 트랩한다"는 전제).
+  > 반면 `npm ci` 는 3.12× 로 추정 범위 안이다. **넘었을 때 먼저 의심할 것은 여전히 자기 측정이다.**
+- **auditallow 로그 볼륨** ([07-acceptance.md §6](07-acceptance.md), [RISKS R6](RISKS.md)) —
+  **`PENDING_DEVICE` 유지. 다만 무엇이 막고 있는지는 이제 안다.**
+  - 앱 프로세스 **안에서는 잴 수 없다**: exec 를 6회 낸 전후로 `logcat -b events -d` 가 **에러 없이 0줄**을
+    내는 반면 `logcat -b main -d` 는 내용을 낸다. Android 가 events 버퍼를 권한 있는 리더에게만 열기 때문이다
+    ([M16 §2](evidence/2026-08-03-m16-ipc-audit.md)).
+  - **이 0 을 "오버헤드 없음" 으로 적으면 권한 실패를 측정으로 둔갑시키는 것이다.** 그렇게 적지 않는다.
+  - **무엇이 이것을 끝내는가**: 워크로드(`git rebase`, npm postinstall 같은 exec 집약)는 반드시 Termux 앱
+    컨텍스트(`uid>=10000 ∧ Seccomp=2`)에서 돌리고, 로그는 **외부 관찰자 adb** 가 동시에 읽는다.
+    관찰자는 실행 조건을 바꾸지 않으므로 이 조합은 유효한 증거가 된다.
+  - **무엇이 막고 있는가**: adb 가 붙은 디바이스 세션. 이 숫자가 없으면 **오버헤드 주장을 발표하지 않는다** —
+    native 대비 기동 오버헤드(같은 문서의 두 세션에서 +8 ms, +4 ms) 중 감사 레코드 몫이 얼마인지 아직 모른다.
 
 ---
 
@@ -309,6 +438,18 @@ ALR MEDIATION INVARIANT: path_traps=0 syscall_stops=0
 - GitHub 릴리스: `alr` 바이너리 + 두 개의 `.so` + `manifest.json`
 - README에 방어 가능한 숫자만 담은 성능 표
 - **호환성 폭 리포트** ([07-acceptance.md §5](07-acceptance.md)) — grun 대비 유일한 차별점이므로 헤드라인 지표
+
+> **현재 상태 (2026-08-03)**
+> - `packaging/termux/alr/build.sh` 는 **있다.** 업스트림 termux-packages 에 올라간 적은 없다.
+> - GitHub 릴리스·`manifest.json` 은 **아직 없다.**
+> - 호환성 폭은 **MEASURED**: 큐레이션된 96개 패키지에서 설치 96/96, 실행 96/96
+>   ([M11](evidence/2026-08-02-m11-breadth.md) 에서 96/96·95/96,
+>   [M14 §2](evidence/2026-08-03-m14-ioctl-php.md) 에서 php-cli 가 풀려 실행 96/96,
+>   [M15](evidence/2026-08-03-m15-cmdline-2604.md) 에서 회귀 없음 확인).
+>   **인용할 때의 정직한 표현은 [00-product.md §3](00-product.md) 을 따른다** — 아카이브 전체가 아니라
+>   큐레이션된 96개, 단일 MediaTek 기기다. 그리고 php 는 **원인을 모른 채 임계값 위에 있을 뿐이다**
+>   (M14 §2) — "고쳤다" 로 적지 않는다.
+> - **M8 의 auditallow 숫자가 없는 채로 README 성능 표를 내지 않는다.** 위 §M8 참조.
 
 ---
 
@@ -321,6 +462,6 @@ ALR MEDIATION INVARIANT: path_traps=0 syscall_stops=0
 | M3 | 중간 | 대부분 배관. 여기서 막히면 M2 테이블 문제 |
 | M4 | 중간 | 심볼 수가 많지만 반복적. 성능 예산이 진짜 제약 |
 | M5 | **높음** | exec 13종 + 비대칭 경로 인자. 버그가 가장 잘 숨는 곳 |
-| M6 | 중간 | link2symlink가 까다롭지만 P6이 꺼줄 수도 있다 |
-| M7 | 중간 | 대부분 회귀 테스트 작성 |
+| M6 | 중간 | ~~P6이 꺼줄 수도 있다~~ — P6은 `EACCES`였다. link2symlink는 켠 채로 간다 |
+| M7 | 중간 | 대부분 회귀 테스트 작성. 단 codex 는 정적 링크라 **테스트로 해결되지 않는다** |
 | M8 | 낮음 | 이식 + 측정 |

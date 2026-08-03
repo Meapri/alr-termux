@@ -63,7 +63,7 @@ Termux
 
 `git status` 10k 파일 모델(13,500회 재작성): 재작성 총비용 **0.82 ms**. PRoot는 같은 호출들에 5~20 µs의 ptrace 왕복을 내므로 67~270 ms다. 성능 논지가 큰 여유를 두고 성립한다.
 
-> 아직 `MODELED`인 부분: 13,500이라는 호출 수는 문헌 추정이다. M8에서 `strace -c -f git status`로 실측해 확정한다.
+> **위 표의 `git status` 모델은 그 뒤 실측이 뒤집었다 (더 좋은 쪽으로).** 13,500이라는 재작성 횟수는 문헌 추정이었다. `rw()` 안에 카운터를 넣어 재보니 `total=9912 rewritten=26 relative=9887 sysdir=1` — **재작성이 필요한 호출은 26회(0.26%)뿐**이고 경로 계층 총비용은 0.82 ms가 아니라 **≈40 µs**, 즉 모델보다 20배 싸다 ([M8](evidence/2026-08-02-m7-m8-workloads-perf.md)). `p[0] != '/'`를 함수 첫 줄에 둔 판단이 전체 호출의 99.7%를 3.9 ns에 처리한다. 이 비율은 `git status`에 대한 것이며 워크로드마다 다르다.
 
 ## 2. 큰 재작업을 유발할 수 있는 리스크 (Major)
 
@@ -106,41 +106,121 @@ Android는 앱이 **netd를 통해** 해석하기를 기대한다. bionic의 `ge
 
 **우선순위**: M6 착수 전 필수. 현재 `apt update`가 이것 때문에 진행되지 않는다.
 
-### R4. SIGSYS ptrace 왕복 비용이 예상보다 큼 — `PENDING_DEVICE`
+### ~~R4. SIGSYS ptrace 왕복 비용이 예상보다 큼~~ — **해소됨** ✅ `MEASURED`
 
-설계는 "프로세스당 몇 번뿐"을 전제한다. 실제로 어떤 워크로드가 차단 syscall을 반복 호출하면(예: 어떤 라이브러리가 `faccessat2`를 루프에서 부름) 비용이 누적된다.
+설계는 "프로세스당 몇 번뿐"을 전제했다. 우려는 어떤 워크로드가 차단 syscall을 루프에서 부르면(예: 어떤 라이브러리가 `faccessat2`를 반복 호출) 비용이 누적된다는 것이었다.
 
-**해결**: 슈퍼바이저가 프로세스당 SIGSYS 수를 집계한다. 소프트 게이트 `sigsys_per_process <= 8`. 초과하면 원인을 조사하고, 정말 필요하면 [ADR 0001](adr/0001-signal-only-ptrace-supervisor.md)의 옵션 (C)(부팅 창에서만 ptrace 후 detach + in-process 핸들러)를 재검토한다.
+**모든 실행이 내는 슈퍼바이저 요약 한 줄이 그 자체로 측정치다.** 실측:
 
-### R5. exec 오버헤드가 히어로 벤치를 잡아먹음 — `PENDING_DEVICE`
+| 워크로드 | 실측 | 프로세스당 |
+|---|---|---|
+| `/bin/true` ([M3](evidence/2026-08-02-m3-first-boot.md)) | `pids=1 sigsys=1 emulated=1` | 1.0 |
+| exec 체인 ([M4/M5](evidence/2026-08-02-m4-m5-path-exec.md)) | `pids=2 sigsys=3 emulated=3` | 1.5 |
+| `git status` 10k 파일 ([M8](evidence/2026-08-02-m7-m8-workloads-perf.md)) | `pids=21 sigsys=22 emulated=22` | **1.05** |
+| SysV IPC 프로브 ([M16](evidence/2026-08-03-m16-ipc-audit.md)) | `sigsys=4` (`set_robust_list` 1 + IPC 3) | 4 † |
 
-`LD_PRELOAD` DSO가 execve마다 하나 더 매핑·재배치되고 전역 심볼 스코프가 커진다. `npm ci`는 라이프사이클 스크립트로 프로세스를 대량 생성한다. **`npm ci`가 히어로 벤치인데 오버헤드가 드러나는 곳도 exec다.**
+† M16은 `pids`를 적지 않았다. 이 프로브는 차단 syscall 세 개를 **일부러 밟는** 단일 프로그램이므로 워크로드가 아니라 인위적 최악 케이스다.
 
-여기에 명시적 ld.so 호출(argv 조립 + 파일 분류를 위한 open/read)이 더해진다.
+워크로드 행은 전부 `path_traps=0 syscall_stops=0` 이다 — PRoot와 갈리는 불변식이 실측에서 유지된다.
 
-**해결**: M8에서 `exec_throughput`를 native/alr/proot 3자 비교로 측정한다. `npm ci` 비율이 1.5배 미만이면 히어로 벤치에서 내리고 `git status`만 남긴다.
+**우려했던 "루프 안의 차단 syscall"은 나타나지 않았다.** 21 프로세스짜리 워크로드가 22회다. 계수가 **syscall 수가 아니라 프로세스 수에 비례**한다: `set_robust_list`가 프로세스당 1회이고, 나머지는 그 프로세스가 실제로 한 번씩 시도한 것뿐이다(Node의 `io_uring_setup`, IPC 프로브의 3건). 관측된 최대는 Node 검증 스크립트 1회 실행의 **10건**이지만([M7](evidence/2026-08-02-m7-m8-workloads-perf.md)) 그 실행 자체가 여러 프로세스다.
 
-### R6. `auditallow` 로그 볼륨 — `PENDING_DEVICE`
+**왕복 1회의 단가는 따로 재지 않았다 — 잴 필요가 없었다.** 이 트랩들은 이미 M8의 종단 수치(`git status` 49 ms, 기동 28 ms) **안에** 포함되어 있고, 계수가 O(프로세스)이므로 워크로드가 커져도 늘지 않는다. [ADR 0001](adr/0001-signal-only-ptrace-supervisor.md) 옵션 (C)(부팅 창에서만 ptrace 후 detach) 재검토는 불필요하다.
+
+소프트 게이트 `sigsys_per_process <= 8`은 **회귀 감지용으로 남긴다.** 초과는 비용 문제가 아니라 에뮬레이션 테이블에 빠진 항목이 있다는 신호로 읽는다 ([09-codex-playbook.md](09-codex-playbook.md)).
+
+### ~~R5. exec 오버헤드가 히어로 벤치를 잡아먹음~~ — **해소됨** ✅ `MEASURED`
+
+`LD_PRELOAD` DSO가 execve마다 하나 더 매핑·재배치되고 전역 심볼 스코프가 커진다. 여기에 명시적 ld.so 호출(argv 조립 + 파일 분류를 위한 open/read)이 더해진다. **`npm ci`가 히어로 벤치인데 오버헤드가 드러나는 곳도 exec다** — 히어로 벤치가 자기 자신을 잡아먹을 수 있다는 것이 리스크였다.
+
+기준은 미리 정해 두었다: **`npm ci` 비율이 1.5배 미만이면 히어로 벤치에서 내리고 `git status`만 남긴다.**
+
+기동 3자 비교, `/bin/true` 9회 중앙값 ([M8](evidence/2026-08-02-m7-m8-workloads-perf.md)):
+
+| | 시간 | alr 대비 |
+|---|---|---|
+| native (Termux bionic) | 24 ms | — |
+| **alr** | **28 ms** | 1.00× |
+| proot-distro | 304 ms | **10.9× 느림** |
+
+exec당 절대 오버헤드는 **+4~8 ms**다(같은 문서의 두 측정: 21→29, 24→28). **이건 실재하고 사라지지 않는다.** 다만 proot는 같은 exec에 +280 ms를 낸다.
+
+`npm ci` 105 패키지, **동일 조건 A/B** ([M12 §4](evidence/2026-08-03-m12-spawn-resolver.md) — node 바이너리·npm·락파일·npm 캐시를 복사해 양쪽을 같게 맞춰, M8의 "git 빌드 상이" 약점을 제거했다):
+
+| | proot-distro | alr | 배수 |
+|---|---|---|---|
+| `npm ci` | 6.87 / 6.24 / 6.26 s | 2.00 / 2.00 / 1.99 s | **3.12×** |
+
+**3.12×는 기준 1.5×의 두 배다 — `npm ci`는 히어로 벤치로 남는다.** exec 오버헤드가 실재함에도 그렇다. 프로세스를 대량 생성하는 워크로드일수록 proot의 기동 비용(10.9×)이 우리 것(+4~8 ms)보다 훨씬 빨리 누적되기 때문이다.
+
+> M12가 적어 둔 caveat는 그대로 유효하다: proot 게스트가 26.04, alr 게스트가 24.04이고 단일 MediaTek 기기 1회 세션이다. 그건 배수의 **정밀도** 문제이지 R5(오버헤드가 벤치를 잡아먹는가)의 답을 바꾸지 않는다.
+
+### R6. `auditallow` 로그 볼륨 — `PENDING_DEVICE` (측정 시도했고, 막힌 지점을 안다)
 
 `untrusted_app_27`은 `execute`와 `execute_no_trans` 양쪽에 `auditallow`가 걸려 있다. 게스트의 모든 execve와 모든 `.so` 매핑이 logd에 감사 레코드를 남긴다. Node 하나가 시작 시 `.so` ~40개 → 레코드 ~40개.
 
 **이것이 PRoot 대비 이 설계의 지배적 숨은 비용일 수 있다.** PRoot는 게스트 바이너리를 직접 exec하지 않으므로 이 비용이 없다.
 
-**해결**: M8에서 exec 집약 워크로드(`git rebase`, npm postinstall)의 `logcat -b events` 볼륨을 측정한다. **오버헤드 주장을 발표하기 전에 수치를 확보한다.**
+**2026-08-03 측정 시도 — 앱 프로세스 안에서는 잴 수 없다** ([M16 §2](evidence/2026-08-03-m16-ipc-audit.md)):
 
-### R7. Codex의 `rustix` raw-syscall 백엔드 — `PENDING_DEVICE`
+```
+logcat -b events -d | wc -l   → 0     (에러 메시지조차 없음)
+logcat -b main   -d | wc -l   → 8     ← 양성 대조: 계측기 자체는 동작한다
+```
 
-Codex CLI는 Rust다. Rust std는 libc 래퍼를 쓰지만, `rustix` 크레이트는 raw syscall 백엔드를 선택할 수 있다. 그 경로를 쓰면 libuv와 똑같이 경로 가상화를 우회한다.
+`events`만 비고 `main`은 내용이 있다. Android는 events 버퍼를 권한 있는 리더에게만 연다. **이 `0`은 "오버헤드 없음"이 아니라 권한 실패다.** 그대로 기록할 뻔했다.
 
-**해결**: M7에서 `strace -f`로 확인. 우회하면 `syscall()` 인터포즈로는 못 잡으므로(인라인 asm) 정적 링크 musl 바이너리의 특성상 대응이 어렵다. 최악의 경우 Codex를 게스트가 아니라 **Termux에서 직접** 실행하는 것을 권장한다 (musl 정적 링크라 rootfs가 필요 없다).
+**무엇이 이것을 끝내는가**: exec 집약 워크로드(`git rebase`, npm postinstall)를 **Termux 앱 컨텍스트에서** 돌리면서 `adb logcat -b events`를 **기기 밖에서** 켜 두고 워크로드 전후 레코드 수의 차를 잰다. 게스트 실행은 반드시 실제 앱 컨텍스트여야 하지만(`uid>=10000 ∧ Seccomp=2`), 로그를 *읽는* 쪽은 adb여도 유효하다 — 관찰이 실행 조건을 바꾸지 않기 때문이다.
 
-### R8. Codex 샌드박스 비활성화 키 미확정 — `PENDING_DEVICE`
+**오늘 무엇이 막는가**: 지금 계측은 전부 기기 안(ssh→Termux)에서 돈다. 기기 밖 관찰자가 붙은 세션이 필요하다. **코드 문제가 아니라 측정 하네스 문제다.**
 
-2026년 시점의 정확한 설정 키/플래그 철자를 확인하지 못했다.
+**그때까지의 규칙**: 오버헤드 수치를 낼 때 auditallow 비용을 "0"이나 "무시 가능"으로 적지 않는다. M8의 기동 +4~8 ms 안에 **이미 포함되어 있다**는 것까지가 지금 말할 수 있는 전부이고, 그중 얼마가 감사 레코드인지는 모른다.
 
-**해결**: M7에서 디바이스의 `codex --help`로 확정하고 [05-provisioning-spec.md §5.2](05-provisioning-spec.md)를 갱신한다. **추측해서 하드코딩하지 말 것.**
+### ~~R7. Codex의 `rustix` raw-syscall 백엔드~~ — **답 나옴, 그리고 더 나쁘다** ✅ `MEASURED`
 
-**부수 보안 이슈**: 샌드박스를 끄면 alr이 에이전트와 사용자 디바이스 사이의 유일한 방어선이 된다. alr은 보안 경계가 아니다. 설치 시 사용자에게 명시적으로 고지한다.
+질문은 "Codex가 `rustix`의 raw syscall 백엔드를 써서 경로 가상화를 우회하는가"였다. **답은 그 질문보다 앞에 있다: `LD_PRELOAD`가 애초에 로드되지 않는다.**
+
+[M12 §8](evidence/2026-08-03-m12-spawn-resolver.md) 실측:
+
+```
+llvm-readelf -l  …/codex                                    → ET_EXEC, INTERP 프로그램 헤더 없음
+llvm-readelf -d  …/codex | grep NEEDED                      → (없음)
+ALR_LOG=2 alr run …/codex --version | grep -c 'alr preload:' → 0    (대조: git 은 1)
+```
+
+배포 바이너리가 **정적 링크 musl**(269 MB)이다. 동적 링커가 개입하지 않으므로 preload DSO는 매핑조차 되지 않는다. 백엔드가 `rustix`든 `libc` 크레이트든 **무관하다** — Codex의 모든 경로 연산이 rootfs가 아니라 Android 파일시스템으로 간다. 시작 시의 `could not create PATH aliases: Read-only file system`이 그 증거다.
+
+따라서 `ALR CODEX VERSION: PASS`는 **바이너리가 실행된다**는 뜻이지 **게스트 안에서 동작한다**는 뜻이 아니다. 수용 테스트 `ALR CODEX LINKAGE`가 이 상태를 추적하며, 상류가 동적 빌드로 바꾸면 알아챈다.
+
+원래 R7이 적어 둔 완화책("최악의 경우 Termux에서 직접 실행")은 **이미 사실상의 현재 상태다.** 게스트에서 띄우든 Termux에서 띄우든 Codex가 보는 파일시스템은 같다.
+
+→ 아래 §4의 **"정적 링크 게스트 바이너리"** 및 바로 그 아래 codex 행으로 이관. `KNOWN_FAIL:unhooked-static-binary`.
+
+### R8. Codex 샌드박스 비활성화 키 — 절반 확정, 나머지는 `PENDING_DEVICE`
+
+**확정된 것** — 기기의 `codex --help` ([M7](evidence/2026-08-02-m7-m8-workloads-perf.md)): CLI 플래그는 `-s, --sandbox <SANDBOX_MODE>`이고 설정 키 `sandbox_permissions`가 존재한다. M7은 이것으로 R8을 "해소"로 적었으나 **모드 이름은 열려 있었다.**
+
+**코드가 실제로 하는 것** — `src/cli/alr.c`의 `with_codex()`는 `<R>/root/.codex/config.toml`에 다음을 쓰고
+
+```
+sandbox_mode = "danger-full-access"
+```
+
+`alr: NOTE codex sandbox disabled; alr is not a security boundary`를 출력한다. Landlock과 bubblewrap이 Android 앱 프로세스에서 동작하지 않으므로 Codex 자신의 샌드박스는 꺼야 한다는 판단은 옳다.
+
+**남은 것은 두 가지이고 둘 다 추측이다.**
+
+1. **철자.** 기기에서 확인된 키는 `sandbox_permissions`인데 우리가 쓰는 것은 `sandbox_mode`이고, 모드 문자열 `danger-full-access`는 **어떤 실측에도 나오지 않는다.** 소스의 주석 자신이 "Confirm the exact mode name with `codex --help` for your version"이라고 적고 있다. R8이 금지한 "추측해서 하드코딩"이 아직 코드에 남아 있다.
+2. **그 파일을 Codex가 읽기는 하는가** — `UNVERIFIED`. R7이 확정했듯 Codex는 정적 링크라 경로 가상화가 없다. `alr`은 게스트에 `HOME=/root`를 넘기므로 Codex는 `/root/.codex/config.toml`을 **Android 루트** 기준으로 찾는다 — 우리가 쓴 `<R>/root/.codex/config.toml`이 아니다. **우리가 쓰는 설정을 아무도 읽지 않을 가능성이 높다.** 이건 코드와 [M12 §8](evidence/2026-08-03-m12-spawn-resolver.md)로부터의 추론이지 측정이 아니다.
+
+**무엇이 이것을 끝내는가** (기기 세션 1회):
+- `codex --help` 전문과 설치된 버전의 `config.toml` 문서를 받아 키 목록을 확정한다.
+- **일부러 틀린 값**(`sandbox_mode = "alr-bogus"`)을 넣고 Codex를 띄운다. 거부하면 파일이 읽히는 것이고, 아무 변화가 없으면 읽히지 않는 것이다. **유효한 값으로는 두 경우를 구분할 수 없다** — 이 프로젝트가 반복해 틀린 "양성 대조 없는 관측"이 정확히 그 형태다.
+- 읽히지 않는다면 쓸 자리는 Android 쪽 `$HOME/.codex/`이며, 그때 [05-provisioning-spec.md §5.2](05-provisioning-spec.md)와 `with_codex()`를 함께 고친다.
+
+**오늘 무엇이 막는가**: 기기 세션만 있으면 된다. 코드도 하네스도 아니다.
+
+**부수 보안 이슈 (더 커졌다)**: 샌드박스를 끄면 alr이 에이전트와 사용자 디바이스 사이의 유일한 방어선이 된다. **alr은 보안 경계가 아니다.** 게다가 R7에 따라 Codex는 경로 가상화조차 받지 않으므로 rootfs가 아니라 **Android 파일시스템**을 대상으로 동작한다. 설치 시 사용자에게 명시적으로 고지한다.
 
 ### ~~R14. preload SIGSEGV~~ — **근본 원인 확정 및 수정** ✅
 
@@ -167,17 +247,33 @@ glibc `_dl_init()`은 `l_initfini`를 **내림차순**으로 순회하고, prelo
 
 ## 3. 관리 가능한 리스크 (Minor)
 
-### R9. SysV IPC 가용성 — `PENDING_DEVICE`
+### ~~R9. SysV IPC 가용성~~ — **해소됨** ✅ `MEASURED` (막힌다)
 
-Android seccomp가 SysV IPC(`shmget`/`semget`/`msgget` 계열)를 막는지 확인되지 않았다. 막지 않는다면 **업스트림 `fakeroot` 패키지를 그대로 쓰는 것**이 자체 shim보다 낫다 (유지보수 부채 감소).
+질문은 "Android seccomp가 SysV IPC를 막는가, 막지 않는다면 업스트림 `fakeroot` 패키지를 그대로 쓸 수 있는가"였다.
 
-**해결**: `alr doctor` P2가 답한다. M6에서 A/B 결정.
+**2026-08-03 실측** ([M16 §1](evidence/2026-08-03-m16-ipc-audit.md), `tests/device/probe_ipc.c`):
 
-### R10. 하드링크가 일부 디바이스에서는 동작할 수 있음 — `PENDING_DEVICE`
+```
+shmget : Function not implemented
+semget : Function not implemented
+msgget : Function not implemented
+```
 
-`link(2)` `EACCES`는 Android 11/12에서 직접 관찰되었고 10~16 정책 검토로 확인되었다. 그러나 OEM/커널 차이 가능성이 있다.
+`EPERM`이 아니라 **`ENOSYS`**라는 점이 원인을 말해 준다. 같은 실행의 `ALR_LOG=2` 로그에 `alr sigsys` 4건 = `set_robust_list` 1 + IPC 3이 찍힌다. 즉 세 syscall 모두 zygote 필터에 `SECCOMP_RET_TRAP`으로 걸려 SIGSYS로 오고, 우리 슈퍼바이저가 기본값 `-ENOSYS`로 에뮬레이션한 것이다. **게스트 안에서 SysV IPC는 쓸 수 없다.**
 
-**해결**: `alr doctor` P6이 실제로 테스트한다. **성공하면 link2symlink 계층 전체를 끈다** — 불필요한 복잡도이자 버그 표면이다.
+**결론: 업스트림 `fakeroot`는 후보에서 탈락한다.** 그 구현은 `faked` 데몬 + SysV 메시지큐이고, 그 메시지큐가 이 플랫폼에 없다. [02-architecture.md §4](02-architecture.md)의 `mmap(MAP_SHARED)` 공유 DB shim은 "유지보수 부채를 감수한 선택"이 아니라 **유일한 선택지**였다. M6의 A/B는 실행할 A가 없어 결정 자체가 필요 없다.
+
+게스트 일반에 대한 영향은 제한적이다 — 대상 워크로드 중 SysV IPC를 쓰는 것이 없고, 쓰는 소프트웨어(일부 DBMS, X11 MIT-SHM)는 애초에 비목표다. `ENOSYS`는 라이브러리가 폴백 경로를 타게 하는 표준 신호이기도 하다.
+
+### R10. 하드링크가 일부 디바이스에서는 동작할 수 있음 — `PENDING_DEVICE` (이 기기에서는 답이 나왔다)
+
+**이 기기에서는 실패한다.** `alr doctor` P6이 같은 디렉토리 `link(2)`에 **`EACCES`**를 보고했다 ([device-bringup](evidence/2026-08-02-device-bringup.md)). rootfs를 앱 사설 저장소에 풀 때 tar가 하드링크 항목에서 실패하는 것과 정확히 일치한다 ([M3](evidence/2026-08-02-m3-first-boot.md)) — 그 경고를 흘려보내면 `perl5.38.2`와 `uncompress`가 없는 **조용히 깨진 rootfs**가 된다. 따라서 link2symlink 계층은 이 기기에서 **켜져 있고, 끌 수 없다.**
+
+**그럼에도 마커를 유지하는 이유**: 이건 정책 문서가 아니라 **한 기기의 파일시스템 실측**이다. 근거는 Android 10~16 정책 검토, Android 11/12 직접 관찰, 그리고 이 MediaTek MT8775 1대뿐이다. OEM 커널과 스토리지 스택 차이(f2fs vs ext4, sdcardfs 잔재)에서 달라질 여지가 남는다. 이 항목은 `PASS`도 `FAIL`도 아니라 **"이 기기에서는 FAIL, 모집단에 대해서는 미지"**다.
+
+**무엇이 이것을 끝내는가**: 두 번째 기기(다른 벤더 SoC, 가급적 Android 12~15)에서 `alr doctor` P6을 돌린다. **성공하면 그 기기에서 link2symlink 전체를 끈다** — 불필요한 복잡도이자 버그 표면이고, 런타임 스위치는 이미 있다(`state/<name>/doctor.json`의 `link2symlink`, [04-preload-spec.md §8](04-preload-spec.md)).
+
+**오늘 무엇이 막는가**: 참조 기기가 1대뿐이다. **코드가 아니라 기기 수가 막고 있다.**
 
 ### R11. phantom process 32개 한도 — `SOURCE`, 완화만 가능
 
@@ -191,11 +287,17 @@ Ubuntu 20.04 / Debian 11(glibc 2.31)에는 `--argv0`이 없어 argv[0]이 호스
 
 **해결**: Ubuntu 24.04만 v1 타깃. 구형 지원을 추가하려면 `ld.so --help`를 파싱해 지원 옵션 집합을 캐시하고, `argv0_leaks=true`를 상태에 기록한다.
 
-### R13. PTY 슬레이브 ioctl 화이트리스트 — `SOURCE`, 완화 가능
+### ~~R13. PTY 슬레이브 ioctl 화이트리스트~~ — **해소됨** ✅ `MEASURED` (전제가 틀렸다)
 
-13개만 허용. `FIONREAD`가 없는 것이 가장 아프다 (readline/ncurses가 쓴다).
+이 항목은 "13개만 허용되고 **`FIONREAD`가 없는 것이 가장 아프다**(readline/ncurses가 쓴다)"고 적고 있었다. **그 전제가 실측으로 반박되었다** ([M14 §1](evidence/2026-08-03-m14-ioctl-php.md), `tests/device/probe_ioctl.c` — 게스트가 `/dev/ptmx`로 직접 연 페어에 대한 census):
 
-**해결**: [04-preload-spec.md §11](04-preload-spec.md)의 번역 계층. 생 `EACCES`를 그대로 돌려주면 안 된다.
+| 허용 | 거부 (`EACCES`) |
+|---|---|
+| `TCGETS` `TCSETS` `TIOCGWINSZ` `TIOCSWINSZ` **`FIONREAD`** `TIOCOUTQ` | `TCGETS2` `TIOCGSID` `TIOCGETD` `TIOCEXCL` `TIOCSTI` |
+
+**`FIONREAD`는 그냥 허용된다.** [04-preload-spec.md §11](04-preload-spec.md)이 요구하던 PTY 마스터 fd 에뮬레이션은 애초에 필요가 없었고, 바로 그 요구가 이 절 전체를 미구현으로 묶어 두고 있었다. 남은 4개는 국소 번역으로 끝났다(`TCGETS2`→`TCGETS` 등). `TIOCSTI`만 **의도적으로 계속 거부**한다 — `neverallowxperm`이라 절대 허용될 수 없고, 성공을 가장하면 주입된 입력이 조용히 사라진다.
+
+회귀 테스트 `IOCTL PTY TRANSLATED` / `IOCTL TIOCSTI STAYS DENIED`가 지킨다.
 
 ## 4. 명시적으로 수용한 한계 (리스크 아님)
 
@@ -229,6 +331,10 @@ Ubuntu 20.04 / Debian 11(glibc 2.31)에는 `--argv0`이 없어 argv[0]이 호스
 | grun 대비 속도 우위 | 무승부에 가깝다. 차별점은 스톡 rootfs 호환성 |
 
 ## 5. 검증 우선순위
+
+> **이 목록은 1번 기기에서 이미 전부 돌았다** — MediaTek MT8775 / Android 16 / 커널 `6.1.145-android14` / `untrusted_app_27` / `Seccomp=2`. 결과는 [device-bringup](evidence/2026-08-02-device-bringup.md)에 있다(P1~P10 `READY, FATAL 0`, syscall 468개 중 239개 차단). 따라서 아래는 **2번 기기 프로토콜**이다. 남은 `PENDING_DEVICE` 중 R10(P6)은 정확히 이것만 기다리고 있다.
+>
+> 두 항목은 이 목록이 세워질 때와 의미가 달라졌다: **P9 `/dev/full`은 이제 영구 비목표**라(§4) 결과를 기록만 하고 대응하지 않는다. **P2는 SysV IPC까지 답했다**(R9).
 
 디바이스를 확보하면 **이 순서로** 확인한다. 앞의 것이 실패하면 뒤는 의미가 없다.
 

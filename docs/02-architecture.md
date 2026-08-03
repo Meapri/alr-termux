@@ -60,10 +60,15 @@
 | 트랩 빈도 | `git status` 10k 파일 → **12,000~15,000회** | 프로세스당 **손에 꼽는 횟수** (부팅 시 `set_robust_list` 1회, `rseq` 0~1회, 이후 차단 syscall이 실제로 발생할 때만) |
 | 사용하는 ptrace 요청 | `PTRACE_SYSCALL` (+ seccomp `RET_TRACE`) | `PTRACE_CONT` 만. **`PTRACE_SYSCALL`을 절대 쓰지 않는다** |
 | 경로 재작성 위치 | 트레이서가 `/proc/<tid>/mem`으로 게스트 메모리 수정 | **게스트 프로세스 안에서** 문자열 프리픽스 (컨텍스트 스위치 0) |
-| path syscall 비용 | 4회 컨텍스트 스위치 + 6~15회 ptrace/process_vm 연산 ≈ **5~20 µs** | **≤ 100 ns 목표** |
+| path syscall 비용 | 4회 컨텍스트 스위치 + 6~15회 ptrace/process_vm 연산 ≈ **5~20 µs** (모델) | **≤ 100 ns 목표 → 실측 61 ns**(재작성) / **3.9 ns**(상대경로 통과) |
 
 > **정확한 표현**: "우리는 모든 syscall에서 ptrace를 없앤다"가 **아니다** (PRoot도 모든 syscall을 트랩하지 않는다 — §00-product.md §4). 정확한 표현은:
 > **"PRoot는 path-bearing syscall마다 ptrace 왕복을 낸다. alr은 path syscall을 절대 트랩하지 않는다. alr의 ptrace는 Android가 죽이려 드는 syscall이 실제로 발생했을 때만, 프로세스당 몇 번 발동한다."**
+
+> ✅ **`MEASURED` (2026-08-02) — 이 절은 더 이상 설계 논증이 아니다.** 같은 기기·같은 워크로드(10,000 파일 `git status`), 각 5회 중앙값: native 42 ms / **alr 49 ms** / proot-distro 1,704 ms → **proot-distro 대비 34.8×**. 프로세스 기동(`/bin/true`, 9회 중앙값)은 24 / 28 / 304 ms → **10.9×**.
+> alr 쪽 `rw()` 카운터 실측은 경로 호출 **9,912회 중 재작성 26회(0.26%)**, 나머지 9,887회(99.7%)는 `p[0] != '/'` 한 줄로 통과했다. 경로 계층 총비용 **≈ 40 µs**, 즉 49 ms 의 **0.08%** 다(증거 파일의 0.07% 는 56 ms 를 분모로 한 값이다 — 분모를 바꾸면서 비율을 다시 계산하지 않으면 이렇게 어긋난다). 슈퍼바이저 카운터는 `path_traps=0 syscall_stops=0` — **PRoot와 갈리는 불변식이 실행 중에도 성립한다.** [M8 실측](evidence/2026-08-02-m7-m8-workloads-perf.md)
+>
+> ⚠️ 위 표의 **PRoot 트랩 빈도 12,000~15,000회는 여전히 모델값이다** (`UNVERIFIED`). 실측한 것은 *우리* 경로 계층의 호출 수(9,912회)이지 proot 의 ptrace 왕복 수가 아니다 — 그것을 세려면 proot 를 `-v` 로 돌리거나 외부에서 관측해야 하고, 하지 않았다. 다만 proot 의 초과 시간 1,655 ms 를 9,912 로 나누면 **호출당 ≈ 167 µs** 로 [§D1](01-platform-facts.md)의 5~20 µs 모델보다 크다. 세 실행의 git 빌드가 서로 다르고(2.55 / 2.43 / 2.53) MediaTek MT8775 1회 세션이라는 단서는 [M8 의 정직성 규칙](evidence/2026-08-02-m7-m8-workloads-perf.md)을 그대로 따른다 — 34.8× 를 무단서 헤드라인으로 쓰지 않는다.
 
 ## 4. 컴포넌트
 
@@ -118,7 +123,15 @@
 > M6에서 업스트림 `fakeroot` 패키지 채택을 검토할 때도 이 계약이 성립한다: 업스트림 `libfakeroot.c`는 `chmod`/`chown`/`lchown`/`mknod`를 감싸고 `dlsym(RTLD_NEXT, ...)`로 해석한 `next_*`에 **원본 경로**를 넘기므로, preload가 그 심볼들을 정의하고 있어야만 재작성이 일어난다.
 
 DB: `$ALR_FAKEROOT_DB`가 지정한 파일의 `mmap(MAP_SHARED)`. `(st_dev, st_ino)` 키의 open-addressed 해시(FNV-1a), 기본 슬롯 262144, `futex` 락. 업스트림 libfakeroot의 faked 데몬 + SysV 메시지큐를 대체한다.
-> Termux에서는 SysV IPC가 Android seccomp에 막히지 않을 수도 있다 (`PENDING_DEVICE`, `alr doctor` P2가 답한다). 막히지 않는다면 **업스트림 `fakeroot` 패키지를 그대로 쓰는 것도 후보**다 — 자체 shim은 유지보수 부채다. M6에서 A/B로 결정한다.
+
+> ⚠️ **정정 (2026-08-03) — 이 메타데이터 DB는 만들지 않았다. 위 문단은 계획으로만 읽어야 한다.**
+> 실제로 들어간 것은 **신원 사칭뿐**이다: `ALR_FAKEROOT=1`이면 `getuid`/`geteuid`/`getgid`/`getegid`/`getres[ug]id`/`getgroups`가 0(root)을 답하고, `chown`/`lchown`/`fchownat`/`fchown`은 아무것도 하지 않고 성공을 가장한다. **파일별 uid/gid/mode 장부는 없고 `stat`은 진짜 소유자를 보고한다** (`src/preload/alr_preload.c` 의 `fakeroot` 절 주석). dpkg 는 chown 뒤에 소유권을 되읽지 않으므로 언팩에는 이것으로 충분하다 — `requires superuser privilege` 블로커가 이렇게 풀렸고([M6 블로커 5](evidence/2026-08-02-m6-package-manager.md)), 그 위에서 apt/dpkg 로 git 이 실제로 설치된다([M10](evidence/2026-08-02-m10-apt-install-git.md)). **그러나 소유권을 감사하는 것에는 충분하지 않다.** 진짜 DB가 필요해지는 소비자가 나타날 때 위 설계를 꺼내 쓴다.
+
+> ✅ **`MEASURED` (2026-08-03) — SysV IPC는 막혀 있다. 업스트림 `fakeroot` 채택안은 닫혔다.**
+> `alr doctor` 의 syscall 스윕(468개 중 239개 차단)이 낸 차단 집합에 **aarch64 SysV IPC 블록 전체 186–197 이 통째로** 들어 있다 — `msgget`/`msgctl`/`msgrcv`/`msgsnd`(186–189), `semget`/`semctl`/`semtimedop`/`semop`(190–193), `shmget`/`shmctl`/`shmat`/`shmdt`(194–197). [스윕 증거](evidence/2026-08-02-device-bringup.md), 목록 원본은 [`src/supervisor/alr_sigsys_table.h`](../src/supervisor/alr_sigsys_table.h) 의 `blocked=` 블록.
+> 게스트 안에서도 직접 확인했다: `shmget`/`semget`/`msgget` 세 개가 전부 **`ENOSYS`**(`Function not implemented`) 로 돌아왔고, 같은 실행의 `ALR_LOG=2` 로그에 `alr sigsys` **4건**이 찍혔다 — `set_robust_list` 1건 + IPC 3건. **`EPERM` 이 아니라 `ENOSYS` 라는 점이 진단이다**: 차단 → SIGSYS → 테이블에 없으므로 `ALR_SIGSYS_DEFAULT_RET`(`-ENOSYS`) 경로가 그대로 돈 것이다. [M16 §1](evidence/2026-08-03-m16-ipc-audit.md)
+> 따라서 업스트림 `libfakeroot` 의 기본 전송(`faked` 데몬 + SysV 메시지큐)은 이 플랫폼에서 성립하지 않는다. **M6의 A/B는 결정되었다 — 자체 구현으로 간다.** (업스트림의 TCP 변종이 원리적으로 남지만 이 저장소에서 확인하지 않았다: `UNVERIFIED`. 추적하지 않는 이유는 두 가지다 — 데몬 프로세스가 하나 늘어 phantom process 예산([§B8](01-platform-facts.md))을 먹고, 지금 필요한 것이 위 문단의 신원 사칭뿐이라 `faked` 가 관리해 줄 메타데이터의 소비자가 없다.) [RISKS R9](RISKS.md) 도 이것으로 닫힌다.
+> 게스트 전반에 대한 영향은 제한적이다 — 대상 워크로드 중 SysV IPC 를 쓰는 것이 없고, 쓰는 소프트웨어(일부 DBMS, X11 MIT-SHM)는 애초에 비목표다. `ENOSYS` 는 라이브러리가 폴백 경로를 타게 하는 표준 신호이기도 하다([M16 §1](evidence/2026-08-03-m16-ipc-audit.md)).
 
 ## 5. exec 체인 — 정확한 형태
 

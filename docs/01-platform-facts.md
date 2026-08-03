@@ -45,7 +45,8 @@ termux     v0.118.3 github-debug, minSdk=24 targetSdk=28  ✅ 설계 요구 충�
 adb shell → uid=2000(shell) context=u:r:shell:s0  Seccomp: 0  Seccomp_filters: 0
 ```
 
-> **성능 측정 주의**: 이 기기는 MediaTek이다. seccomp/SELinux/exec 정책은 전부 AOSP 레벨이라 SoC와 무관하게 이 기기의 **호환성 결과는 그대로 유효**하지만, [00-product.md §4](00-product.md)의 벤치마크 배수는 스냅드래곤 기기에서 다시 측정해야 한다. M8 이전에 참조 기기 #2(Snapdragon)를 확보할 것.
+> **성능 측정 주의**: 이 기기는 MediaTek이다. seccomp/SELinux/exec 정책은 전부 AOSP 레벨이라 SoC와 무관하게 이 기기의 **호환성 결과는 그대로 유효**하지만, 벤치마크 배수는 이 기기 것이다.
+> 실제로 M8은 참조 기기 #2 없이 이 기기에서 돌았다: 10k 파일 `git status` native 42 ms / alr 49 ms / proot-distro 1,704 ms → **34.8배**, 프로세스 기동 24 / 28 / 304 ms → **10.9배** ([증거](evidence/2026-08-02-m7-m8-workloads-perf.md)), `npm ci` proot 6.25 s vs alr 2.00 s → **3.12배** ([증거](evidence/2026-08-03-m12-spawn-resolver.md)). **그러므로 배수를 인용할 때는 "MediaTek MT8775 / Android 16 기준"을 함께 쓴다.** 스냅드래곤 기기에서의 재측정은 여전히 남은 일이며, 그것이 참조 기기 #2가 필요한 두 번째 이유다(첫 번째는 §A6의 차단 집합 일반화).
 
 `run-as`가 debug 서명 빌드에서 동작한다는 이유로 쓰면 안 된다 — zygote를 거치지 않아 필터가 없고, SELinux 도메인도 다르다. 진입 절차는 [scripts/dev-bootstrap.md](../scripts/dev-bootstrap.md).
 
@@ -98,7 +99,7 @@ bionic `SYSCALLS.TXT` + `SECCOMP_ALLOWLIST_{COMMON,APP}.TXT`를 `android12-relea
 
 검증된 선례: Chromium `sandbox/linux/bpf_dsl/seccomp_macros.h` aarch64 분기 — `SECCOMP_REG(ctx,r) ((ctx)->uc_mcontext.regs[r])`, `SECCOMP_SYSCALL(ctx) SECCOMP_REG(ctx,8)`, `SECCOMP_IP(ctx) (ctx)->uc_mcontext.pc`.
 
-### A6. 차단 syscall 목록 — `SOURCE` + `PENDING_DEVICE`
+### A6. 차단 syscall 목록 — `SOURCE` + `MEASURED` (기기 1대 스윕 완료)
 
 `SECCOMP_BLOCKLIST_APP.TXT`에 명시된 것: `setuid`/`setgid`/`setreuid`/`setregid`/`setresuid`/`setresgid`/`setfsuid`/`setfsgid`/`setgroups` 전체, `adjtimex`, `clock_adjtime`, `clock_settime`, `settimeofday`, `acct`, `syslog`, **`chroot`**, `init_module`, `delete_module`, **`mount`**, **`umount2`**, `swapon`, `swapoff`, `setdomainname`, `sethostname`, `reboot`.
 
@@ -112,11 +113,19 @@ allowlist 부재로 차단되는 것(확인됨): `set_robust_list`(99), `get_rob
 > ⚠️ **cred-drop 계열 중 `setresuid`(147), `getresuid`(148), `getresgid`(150)는 차단되지 않는다** — `MEASURED`.
 > 차단되는 것은 143/144/145/146/149/151/152/159뿐이다.
 
-전체 실측 결과(468개 중 239개 차단)와 생성된 에뮬레이션 테이블: [evidence/2026-08-02-device-bringup.md](evidence/2026-08-02-device-bringup.md), [`src/supervisor/alr_sigsys_table.h`](../src/supervisor/alr_sigsys_table.h).
+전체 실측 결과(468개 중 239개 차단)와 생성된 에뮬레이션 테이블: [evidence/2026-08-02-device-bringup.md](evidence/2026-08-02-device-bringup.md), [`src/supervisor/alr_sigsys_table.h`](../src/supervisor/alr_sigsys_table.h). 그 헤더 끝의 `#if 0` 블록이 기기 ground truth(차단 번호 전체)이며, 회귀 diff의 기준선이다.
 
 허용되는 것(확인됨): `prctl`, `seccomp`, `ptrace`, `execve`, `execveat`, `clone`, **`clone3`** (`SECCOMP_ALLOWLIST_COMMON.TXT`에 `clone3(clone_args*, size_t) all` — Docker 시대의 clone3 참사는 여기서 반복되지 않는다).
 
-> `PENDING_DEVICE`: allowlist는 릴리스마다 늘어났고(android12 365줄 → android16 392줄) OEM이 갈릴 수 있다. `alr doctor`가 **syscall 0..460을 실제로 쓸어서** 디바이스의 진짜 차단 집합을 덤프해야 한다. `PTRACE_SECCOMP_GET_FILTER`는 `CAP_SYS_ADMIN`이 필요해 쓸 수 없다.
+> ✅ **SysV IPC는 게스트에서 쓸 수 없다** — `MEASURED` 2026-08-03. ([RISKS R9](RISKS.md) 종결)
+> 스윕의 차단 집합에 **180–197이 통째로** 들어 있다: POSIX mqueue(180–185)와 SysV IPC 전체 — `msgget`(186) `msgctl`(187) `msgrcv`(188) `msgsnd`(189) `semget`(190) `semctl`(191) `semtimedop`(192) `semop`(193) `shmget`(194) `shmctl`(195) `shmat`(196) `shmdt`(197). 즉 zygote 블록리스트에 있고 "혹시 안 막혔을 수도"가 아니다.
+> 게스트에서 직접 불러 확증했다: `shmget`/`semget`/`msgget` 전부 `ENOSYS`(테이블 기본값)를 받고, 같은 실행의 `ALR_LOG`가 SIGSYS 트랩 **3건**을 에뮬레이션했다고 보고한다 — 즉 커널이 실제로 TRAP을 냈고 슈퍼바이저가 받아냈다. 근거: [M16 §1](evidence/2026-08-03-m16-ipc-audit.md) (프로브 소스 `tests/device/probe_ipc.c`).
+> **결과**: R9이 걸어 둔 조건("막지 않는다면 업스트림 `fakeroot`를 그대로 쓴다")이 성립하지 않는다. SysV IPC 백엔드를 쓰는 fakeroot는 게스트에서 동작할 수 없으므로 자체 shim(또는 IPC를 안 쓰는 변종)만 남는다.
+
+> `PENDING_DEVICE` — **없어진 게 아니라 범위가 좁아졌다.** 위 스윕은 **기기 1대**의 결과다(SM-X236N / MediaTek MT8775 / Android 16 / 커널 6.1.145-android14). allowlist는 릴리스마다 늘어났고(android12 365줄 → android16 392줄) OEM이 갈릴 수 있으므로, 이 239개를 "Android의 차단 집합"이라고 부를 근거는 아직 없다. 지금은 "이 기기의 차단 집합"이다.
+> **무엇이 이것을 끝내는가**: 다른 OEM/SoC 기기 한 대, 그리고 Android 12~15 중 한 대에서 같은 `alr doctor` 스윕을 돌려 `alr_sigsys_table.h`의 ground-truth 집합과 **diff**한다. 차이가 0이면 표를 고정 상수로 취급할 수 있고, 아니면 표는 영구히 기기별 생성물로 남아야 한다(그 경우 표를 릴리스에 동봉하는 현재 방식이 틀린 것이 된다).
+> 같은 스윕이 위 `openat2`/`faccessat2` 질문(구버전 Android에서도 허용인가)도 함께 답한다. 두 질문의 blocker가 같으므로 따로 재지 않는다.
+> **무엇이 막고 있는가**: 참조 기기 #2가 없다. 기술적 장애물은 없다 — 스윕은 구현되어 있고 앱 프로세스 안에서 자족적으로 돈다. `PTRACE_SECCOMP_GET_FILTER`로 필터를 읽어 지름길을 낼 수는 없다(`CAP_SYS_ADMIN` 필요). 스윕이 유일한 길이다.
 
 ---
 
@@ -130,7 +139,12 @@ Termux F-Droid/GitHub 빌드는 `targetSdkVersion=28`, `minSdkVersion=21`. targe
 - 위협 모델은 "Android가 규칙을 지운다"가 아니라 **"Android가 `MIN_INSTALLABLE_TARGET_SDK`를 28 위로 올린다"**이다. 릴리스당 +1씩 올라왔으므로(23→24) 29까지는 수년 남았다.
 - **대응**: 마이그레이션 계획을 특정 Android 버전에 걸지 말 것. 대신 첫 실행 때 `$PREFIX`의 스크래치 ELF를 execve해 보고 `EACCES`면 **크게 실패**한다.
 
-> ⚠️ `auditallow`가 `execute`와 `execute_no_trans` **양쪽에** 걸려 있다. 게스트의 모든 execve와 모든 `.so` 매핑이 logd에 감사 레코드를 남긴다. Node 프로세스 하나가 시작 시 `.so` ~40개를 매핑하면 레코드 ~40개다. **이것이 이 설계의 숨은 비용이며 오버헤드 주장을 발표하기 전에 측정해야 한다** (`PENDING_DEVICE`).
+> ⚠️ `auditallow`가 `execute`와 `execute_no_trans` **양쪽에** 걸려 있다. 게스트의 모든 execve와 모든 `.so` 매핑이 logd에 감사 레코드를 남긴다. Node 프로세스 하나가 시작 시 `.so` ~40개를 매핑하면 레코드 ~40개다. **이것이 이 설계의 숨은 비용이며 오버헤드 주장을 발표하기 전에 측정해야 한다** (`PENDING_DEVICE`, [RISKS R6](RISKS.md)).
+>
+> **왜 아직 못 쟀는지는 2026-08-03에 확정됐다: Termux 앱 프로세스 안에서는 잴 수 없다.** 같은 프로세스에서 `logcat -b events -d`는 **에러 없이 0줄**을 내고 `logcat -b main -d`는 내용을 낸다. events 버퍼가 비권한 앱에게 읽히지 않는 것이지, 감사 레코드가 없다는 뜻이 아니다.
+> **그러므로 "0줄"을 "오버헤드 없음"으로 기록하면 안 된다** — 권한 실패를 측정값으로 읽는 것이고, [00-product.md §6](00-product.md)이 금지하는 바로 그 종류의 거짓 PASS다.
+> **무엇이 이것을 끝내는가**: 외부 관찰자. adb로 붙은 호스트에서 `logcat -b events`를 흘려보내는 동안 워크로드는 **Termux 안에서** 돌리고(§A1a — adb shell에는 필터가 없어 거기서 돌린 워크로드는 무효다), exec 집약 구간(`git rebase`, npm postinstall)의 레코드 수와 벽시계 시간을 짝지어 잰다. 관찰만 밖에서, 실행은 안에서.
+> **무엇이 막고 있는가**: 에이전트 세션에서 기기에 붙는 것이 금지되어 있다. 사람 세션 + adb 호스트가 필요하다.
 
 ### B2. Play Store Termux는 v1 미지원 — `SOURCE`
 
@@ -170,9 +184,19 @@ Play 빌드(`termux-apps`)는 targetSdk 37이라 `execute_no_trans`가 없다. t
 
 **단, 두 가지 예외:**
 
-1. **`/dev/full`은 동작하지 않는다.** `ueventd.rc`가 생성하지만 sepolicy에 `full_device` 타입이 없어 `u:object_r:device:s0`로 떨어지고, `domain.te`의 `neverallow domain device:chr_file { open read write }`에 걸려 **모든 도메인에서 `EACCES`**. 스톡 Ubuntu와 그 테스트 스위트들이 `/dev/full`을 가정한다. → preload에서 에뮬레이션(쓰기 시 `ENOSPC`)해야 한다. **`/dev/null`로 심링크하지 말 것** — ENOSPC 테스트가 조용히 통과해 버린다.
-2. **PTY 슬레이브의 ioctl은 화이트리스트다.** `unpriv_tty_ioctls` 13개만 허용: `TIOCOUTQ FIOCLEX FIONCLEX TCGETS TCSETS TCSETSW TCSETSF TIOCGWINSZ TIOCSWINSZ TIOCSCTTY TCFLSH TIOCSPGRP TIOCGPGRP`. 그 밖(`FIONREAD`/`TIOCINQ`, `TIOCGSID`, `TIOCNOTTY`, `TIOCEXCL`, `TIOCPKT`, `TIOCGETD`/`TIOCSETD`, `TCGETS2`/`TCSETS2`, `TIOCLINUX`)은 `EACCES`. `TIOCSTI`는 `neverallowxperm`으로 원천 차단.
-   → preload가 슬레이브 fd의 ioctl을 인터포즈해 흔한 것들을 번역해야 한다. `FIONREAD`가 가장 중요(마스터 쪽 non-blocking read로 에뮬), `TIOCGSID`는 `getsid()`로 답한다. 생 `EACCES`를 돌려주면 readline/ncurses 깊은 곳에서 이해 불가능한 실패가 난다.
+1. **`/dev/full`은 동작하지 않는다.** `ueventd.rc`가 생성하지만 sepolicy에 `full_device` 타입이 없어 `u:object_r:device:s0`로 떨어지고, `domain.te`의 `neverallow domain device:chr_file { open read write }`에 걸려 **모든 도메인에서 `EACCES`**. 스톡 Ubuntu와 그 테스트 스위트들이 `/dev/full`을 가정한다.
+
+   > **에뮬레이션은 비목표로 확정됐다** — 2026-08-03. 이 문서가 요구하던 "쓰기 시 `ENOSPC`" 에뮬레이션은 **구현하지 않기로 했다**: 서빙하려면 프로세스에서 가장 뜨거운 `write()`를 인터포즈해야 하는데 대상 워크로드 중 이 노드를 쓰는 것이 없고, preload 자신이 내부적으로 `write()`를 부르므로 정의하면 자기 호출을 가로챈다(`__*_chk`와 같은 자기 재귀 계열). 게다가 실패 표면이 열려 있어(`puts`, `putchar`, `fwrite_unlocked`, `dprintf`, …) **빠뜨린 심볼은 전부 조용히 성공한 쓰기**가 된다 — 열거 가능하고 요란하게 실패하는 `mkstemp`·NSS 계열과 다르다. [증거](evidence/2026-08-03-m12-spawn-resolver.md) §9, [M13](evidence/2026-08-03-m13-symbol-gate.md) §6.15.
+   > 수용 테스트는 `PRELOAD DEV FULL ENOSPC`를 `KNOWN_FAIL:non-goal-devfull`로 남겨 이 상태를 계속 보이게 한다. **`/dev/null`로 심링크하지 말 것** — ENOSPC 테스트가 조용히 통과해 버린다(그리고 프로브는 `open`이 아니라 실제 **쓰기**로 해야 한다. `: < /dev/full`은 O_RDONLY라 그 지름길을 잡지 못한다).
+2. **PTY 슬레이브의 ioctl은 화이트리스트다.** sepolicy `unpriv_tty_ioctls`가 허용하는 것은 13개: `TIOCOUTQ FIOCLEX FIONCLEX TCGETS TCSETS TCSETSW TCSETSF TIOCGWINSZ TIOCSWINSZ TIOCSCTTY TCFLSH TIOCSPGRP TIOCGPGRP`. `TIOCSTI`는 `neverallowxperm`으로 원천 차단.
+   → preload가 슬레이브 fd의 ioctl을 인터포즈해 흔한 것들을 번역해야 한다. 생 `EACCES`를 돌려주면 readline/ncurses 깊은 곳에서 이해 불가능한 실패가 난다.
+
+   > ⚠️ **`FIONREAD`가 `EACCES`라는 위 목록의 추론은 틀렸다** — `MEASURED` 2026-08-03. 게스트가 `/dev/ptmx`로 직접 연 페어에 대한 실측 인구조사([증거](evidence/2026-08-03-m14-ioctl-php.md) §1):
+   > **허용**: `TCGETS` `TCSETS` `TIOCGWINSZ` `TIOCSWINSZ` **`FIONREAD`** `TIOCOUTQ`.
+   > **거부(`EACCES`)**: `TCGETS2` `TIOCGSID` `TIOCGETD` `TIOCEXCL` `TIOCSTI`.
+   > `FIONREAD`는 그냥 허용된다. **"마스터 쪽 non-blocking read로 에뮬레이션"이라는 요구는 존재하지 않는 문제에 대한 것이었고**, 게스트는 마스터 fd를 쥐고 있지도 않아 그 요구가 §11 구현 전체를 잠가 두고 있었다. 전제를 재는 것이 잠금을 풀었다.
+   > 실제로 필요했던 번역은 작다: `TCGETS2`→`TCGETS`(커널 `termios` 레이아웃, NCCS=19 — glibc의 것이 아니다), `TIOCGSID`→`getsid()`, `TIOCGETD`/`TIOCSETD`→`N_TTY`, `TIOCEXCL`/`TIOCNXCL`/`TIOCNOTTY`→0. **`TIOCSTI`는 계속 `EACCES`로 둔다** — `neverallowxperm`이라 허용될 수 없고, 성공을 가장하면 주입된 입력이 조용히 사라진다.
+   > `TIOCPKT`/`TIOCLINUX`/`TIOCINQ`는 아직 재지 않았다. `TIOCINQ`는 `FIONREAD`와 같은 번호라 함께 허용이다.
 
 ### B6. 하드링크는 실패한다 — `SOURCE` ⚠️
 
@@ -327,10 +351,19 @@ per-syscall 비용은 없지만 **per-exec 비용은 있다**: execve마다 DSO 
 
 **결과 2개:**
 1. 바이너리 직접 설치를 권장하면 **Codex 경로에서 Node를 완전히 제거**할 수 있다 → C8의 io_uring SIGSYS 위험도 사라진다. (사용자 자기 프로젝트용 Node는 여전히 필요하겠지만.)
-2. musl 정적 링크라 rootfs의 glibc에 의존하지 않는다. `rustix` 크레이트의 raw-syscall 백엔드를 쓰는 부분이 있다면 libuv와 똑같이 계층을 우회한다 — **확인 필요** (`PENDING_DEVICE`).
+2. **musl 정적 링크는 "rootfs의 glibc에 의존하지 않는다"가 아니라 "`LD_PRELOAD`가 닿지 않는다"는 뜻이다** — `MEASURED` 2026-08-03. `rustix`의 raw-syscall 백엔드를 쓰는지는 이제 물을 필요가 없는 질문이 됐다. 그보다 앞에서 끝난다: 설치된 `codex`에는 `PT_INTERP`도 `DT_NEEDED`도 없고(ET_EXEC), `ALR_LOG=2`로 돌리면 `alr preload:` 줄이 **0개**다(대조군 `git`은 1개). **preload가 애초에 로드되지 않으므로 경로 가상화가 전혀 적용되지 않고, codex의 모든 경로 연산은 rootfs가 아니라 Android 파일시스템으로 간다.** 겉으로 드러나는 증상은 시작 시의 `WARNING: proceeding, even though we could not create PATH aliases: Read-only file system`이다. [증거](evidence/2026-08-03-m12-spawn-resolver.md) §8, [RISKS R7](RISKS.md).
+   → 따라서 `codex --version`이 도는 것은 **바이너리가 실행된다**는 뜻이지 **게스트 안에서 동작한다**는 뜻이 아니다. 수용 테스트 `ALR CODEX LINKAGE`가 `KNOWN_FAIL:static-unhooked`로 이 상태를 추적하고, 업스트림이 동적 빌드로 바뀌면 자동으로 알아챈다.
+   → 정적/raw-syscall 바이너리는 계속 **비목표**다. 다만 근거가 정정되었다 — "원리적으로 가로챌 수 없다"가 아니라 **비용**이다. seccomp user notification은 이 커널에서 실제로 동작하지만(`no_new_privs`만 켜면 된다) 가로챈 syscall 하나당 **154 µs**이고 필터 없는 베이스라인은 **438 ns**다. 필터 *평가*는 공짜다. arm64 `PR_SET_SYSCALL_USER_DISPATCH`는 이 커널에 없다(인자 두 형태 모두 `EINVAL`). [ADR 0006](adr/0006-raw-syscall-binaries.md).
 
-**Codex의 Linux 샌드박스는 반드시 꺼야 한다** — Landlock과 bubblewrap이 Android 앱 프로세스에서 동작하지 않는다. seccomp 절반은 실제로 동작하지만(prctl 허용, no_new_privs 이미 설정, 필터 스택 허용) 그것만으로는 부족하다.
-→ `alr`은 `sandbox_mode`를 full-access로 두는 Codex 설정을 함께 제공해야 한다. **정확한 2026년 플래그 철자는 디바이스에서 `codex --help`로 확인 후 문서화할 것** (`PENDING_DEVICE`).
+**Codex의 Linux 샌드박스는 반드시 꺼야 한다** — Landlock과 bubblewrap이 Android 앱 프로세스에서 동작하지 않는다. seccomp 절반은 실제로 동작하지만(prctl 허용, no_new_privs는 우리가 켤 수 있음, 필터 스택 허용 — ADR 0006) 그것만으로는 부족하다.
+
+→ **지금 실제로 하는 일**: `alr install --with codex`가 `<rootfs>/root/.codex/config.toml`에 `sandbox_mode = "danger-full-access"`를 쓰고, `alr: NOTE codex sandbox disabled; alr is not a security boundary`를 출력한다 ([`src/cli/alr.c`](../src/cli/alr.c) `with_codex()`).
+
+→ **`PENDING_DEVICE`: 그 철자가 맞는지는 아직 확인되지 않았다.** 기기에서 `codex --help`(또는 `codex config`) 출력을 받아 이 버전이 실제로 받는 값과 대조한 기록이 없다. 소스의 주석도 그렇게 적혀 있다. 값이 틀리면 codex는 조용히 기본 샌드박스로 뜨고, 그건 "동작하지 않는다"가 아니라 **"이해할 수 없는 권한 오류로 실패한다"**로 나타난다.
+  - 함께 확인해야 할 것: **그 파일을 codex가 읽기는 하는가.** `alr`은 게스트 환경에 `HOME=/root`를 넣는데(`alr.c`), codex는 후킹되지 않으므로 `/root`를 rootfs가 아니라 **Android 루트** 기준으로 푼다. 그렇다면 우리가 쓴 config에 도달하지 못한다. 이것은 두 사실(위 2번의 무후킹 + `HOME=/root`)로부터의 추론이고 **UNVERIFIED**다 — 관찰로 확정한 적이 없다.
+  - **무엇이 이것을 끝내는가**: 기기에서 `codex --help` 출력 1회, 그리고 codex가 실제로 여는 config 경로 1회. 후자는 `ALR_LOG`로는 보이지 않는다(preload를 안 타므로) — `strace -f`나 codex 자체 진단이 필요하다.
+  - **무엇이 막고 있는가**: 기기 세션. 기술적 장애물은 없다.
+
 → 부수 효과: 중첩 필터는 커널의 전체 32768 instruction 예산을 공유한다. **자체 필터는 작게 유지**할 것.
 
 ---

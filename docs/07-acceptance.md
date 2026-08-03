@@ -28,13 +28,26 @@
 
 ## 2. 마일스톤별 acceptance
 
+> **현재 온디바이스 스위트 (2026-08-03)**: **PASS=78 FAIL=0 KNOWN_FAIL=2**
+> ([M15](evidence/2026-08-03-m15-cmdline-2604.md)). 두 `KNOWN_FAIL`은
+> `ALR CODEX LINKAGE:static-unhooked`와 `PRELOAD DEV FULL ENOSPC:non-goal-devfull`이며,
+> 둘 다 아래에 이유를 적어 두었다. 기기는 MediaTek MT8775 / Android 16 /
+> 커널 `6.1.145-android14` / `untrusted_app_27` / `Seccomp=2` 한 대뿐이다.
+>
+> ⚠️ **아래 블록은 목표 문자열이지 스위트의 출력이 아니다.** 실제로 emit 되는 이름의 집합은
+> `tests/host/`와 `tests/device/acceptance.sh`이고, 여기 적힌 이름 중 다수는 그 어느 쪽도 내지
+> 않는다. **테스트가 없는 이름에는 상태 토큰을 붙이지 않는다** — 없는 테스트를 세지 않은 채
+> "PASS=73 FAIL=0"을 보고해 온 것이 [M13](evidence/2026-08-03-m13-symbol-gate.md)과
+> [M12 §7](evidence/2026-08-03-m12-spawn-resolver.md)이 정정한 바로 그 오류다. 그 숫자는 존재하는
+> 테스트에 대해서는 정확했고, 없는 테스트에 대해서는 아무 말도 하지 않았다.
+
 ### M1 — 호스트 스캐폴딩
 ```
 ALR BUILD HOST:                   PASS
 ALR BUILD PRELOAD:                PASS
 ALR PRELOAD GLIBC FLOOR 2.17:     PASS
 ALR PATH RULE HOST TESTS:         PASS   (tests/cases/paths.tsv N cases)
-ALR CONFIG ROUNDTRIP:             PASS
+ALR CONFIG ROUNDTRIP:             SKIP   — src/common/alr_config.{h,c} 는 만들지 않았다 (비목표)
 ALR ELF CLASSIFY:                 PASS
 ```
 
@@ -58,9 +71,14 @@ ALR BOOT /bin/true:               PASS  exit=0
 ALR BOOT /bin/echo:               PASS  stdout="alr"
 ALR BOOT /bin/bash -c true:       PASS
 ALR GUEST GLIBC VERSION:          2.39
-ALR SUPERVISOR SIGSYS COUNT:      <n>   (기록만. 보통 1~3)
+ALR SUPERVISOR SIGSYS COUNT:      sigsys=22 / pids=21  (기록만. 프로세스당 ≈1)  MEASURED
 ```
 > **M3이 이 프로젝트의 진짜 첫 증명이다.** 여기가 통과하면 `set_robust_list` 문제가 실제로 풀린 것이다.
+>
+> SIGSYS 수는 [M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)에서 실측됐다. 소프트 게이트
+> `sigsys_per_process <= 8`(§3) 안쪽이고, 스위트의 `SUPERVISOR SIGSYS PER RUN`이 매 실행 이 값을
+> 확인한다. Node 기동은 **실행당** 10건이었는데(같은 문서) 그건 프로세스당 값이 아니므로 게이트와
+> 직접 비교하지 말 것 — 프로세스 수를 함께 적지 않으면 이 두 숫자는 섞인다.
 
 ### M4 — 경로 가상화
 ```
@@ -76,14 +94,28 @@ PRELOAD PROC SELF CMDLINE:        PASS
 PRELOAD DLOPEN ABS PATH:          PASS
 PRELOAD DLOPEN ORIGIN TOKEN:      PASS
 PRELOAD MKSTEMP:                  PASS
-PRELOAD DEV FULL ENOSPC:          PASS
+PRELOAD DEV FULL ENOSPC:          KNOWN_FAIL:non-goal-devfull
 PRELOAD CHK SYMBOLS PRESENT:      PASS
-PRELOAD NO MALLOC IN REWRITE:     PASS
+PRELOAD NO MALLOC IN REWRITE:     (자동 검사 없음 — 아래 주석)
 PRELOAD RW ABS COST:              61.0 ns/op  (게이트: <= 100)  MEASURED
 PRELOAD RW REL COST:               3.9 ns/op  (게이트: <= 20)   MEASURED
 PRELOAD RW SYSDIR COST:           13.8 ns/op  (게이트: <= 40)   MEASURED
 PRELOAD RW MICROBENCH:            PASS
 ```
+
+> **`/dev/full`은 구현하지 않고 비목표로 재분류했다** ([M12 §9](evidence/2026-08-03-m12-spawn-resolver.md)).
+> 서빙하려면 프로세스에서 가장 뜨거운 syscall인 `write()`를 인터포즈해야 하는데, 대상 워크로드 중
+> 이 디바이스 노드를 쓰는 것이 없고, preload 자신이 `write()`를 호출하므로 정의하는 순간 자기
+> 호출을 가로챈다. 결정적으로 실패 표면이 열려 있다 — `puts`/`putchar`/`fwrite_unlocked`/`dprintf`
+> 중 **빠뜨린 심볼은 전부 조용히 성공한 쓰기**가 된다. 열거 가능하고 요란하게 실패하는
+> `mkstemp`(9개)·NSS(15개) 계열과 다르다. 같은 라운드에서 **프로브 자체도 고쳤다**: 기존
+> `: < /dev/full`은 O_RDONLY 열기라 `/dev/zero`로 리다이렉트만 해도 통과했다. 지금은 실제 쓰기가
+> `ENOSPC`를 내는지 보고, 안 나므로 정직하게 `KNOWN_FAIL`로 센다.
+>
+> **`PRELOAD NO MALLOC IN REWRITE`를 emit 하는 테스트는 없다.** R1(재작성 경로 malloc 금지)은
+> 현재 코드 규약과 리뷰로만 지켜지며, `src/preload/alr_preload.c`는 `getaddrinfo` 계열을 명시적
+> 예외로 문서화한다(반환 리스트를 호출자가 `freeaddrinfo`로 푸는 계약이라 malloc 을 피할 수 없다).
+> §3이 이것을 하드 불변식으로 선언하지만 **감시하는 러너가 없다** — §3의 주석을 볼 것.
 
 ### M5 — exec 연속성
 ```
@@ -98,6 +130,17 @@ PRELOAD SYMLINKAT ASYMMETRY:      PASS
 ALR BASH INTERACTIVE:             PASS
 ALR PIPELINE:                     PASS   (echo | grep | wc)
 ```
+
+> **`PRELOAD EXEC STATIC`의 `KNOWN_FAIL`은 영구적이다 — 비목표다.**
+> [ADR 0006](adr/0006-raw-syscall-binaries.md)이 근거를 **정정하면서** 그렇게 결정했다. 이전에는
+> "zygote 필터가 자리를 차지해 seccomp user notification 이 불가능하다"고 적어 왔는데 틀렸다:
+> 스택된 필터에서 커널은 수치가 낮은 액션을 택하므로 `RET_USER_NOTIF`(0x7fc00000)가 zygote 의
+> `RET_ALLOW`(0x7fff0000)를 이기고, 설치가 `EPERM`이던 것은 정책이 아니라 `no_new_privs`가 0이라서였다
+> (앱 프로세스는 켜지 않는다). 즉 **가로챌 수는 있다.** 막는 것은 비용이다 —
+> `bench/microbench/notif_cost.c` 실측으로 알림 왕복 **154 µs/호출**(베이스라인 438 ns의 352배)이고,
+> 필터 평가 자체는 공짜다. 경로 syscall 3만 번짜리 워크로드면 가로채기만으로 4.6초라 PRoot 보다
+> 느려진다. arm64 `PR_SET_SYSCALL_USER_DISPATCH`는 이 커널에 없다(두 형태 모두 `EINVAL`).
+> **SUD 를 지원하는 커널이 흔해지면 이 결정을 뒤집어야 한다.**
 
 ### M6 — 패키지 매니저
 ```
@@ -115,35 +158,112 @@ ALR DPKG LOCAL INSTALL:           PASS
 ALR FAKEROOT IDENTITY:            PASS   uid=0 gid=0
 ```
 
+> `apt update` → `apt install git` 완주는 [M10](evidence/2026-08-02-m10-apt-install-git.md)에서
+> 실측됐다 — 아무것도 없는 상태에서 2분 27초, `git version 2.43.0` 동작. 막고 있던 네 개의 결함은
+> 전부 같은 계열이었다: **glibc 내부 호출은 `LD_PRELOAD`로 가로챌 수 없고, Android 의 `/etc`는
+> 읽기 전용 `/system/etc` 심링크다.**
+
 ### M7 — 타깃 워크로드
 ```
 ALR GIT VERSION:                  PASS
 ALR GIT CLONE LOCAL:              PASS   ← link2symlink 회귀 테스트
 ALR GIT CLONE HTTPS:              PASS   ← NSS + resolver + git-remote-https 서브프로세스
-ALR GIT STATUS 10K:               PASS   elapsed_ms=<n>
+ALR GIT STATUS 10K:               PASS   elapsed_ms=49   MEASURED (native 42 / proot 1,704)
 ALR GIT HOOKS:                    PASS   ← shebang exec
 ALR NODE VERSION:                 PASS
 ALR NODE EXECPATH:                PASS   ← process.execPath가 게스트 경로여야 함
 ALR NODE FS STAT:                 PASS   ← libuv raw syscall 회귀 테스트
 ALR NODE IO_URING SURVIVE:        PASS   (Node 22)  ← SIGSYS 구제 회귀 테스트
-ALR NPM CI:                       PASS   elapsed_ms=<n>
-ALR CODEX VERSION:                PASS
-ALR CODEX SANDBOX DISABLED:       PASS
-ALR PTY TMUX:                     PASS
+ALR NPM CI:                       PASS   elapsed_ms=2000 MEASURED (proot 6,240~6,870 — 동일 바이너리)
+ALR CODEX VERSION:                PASS   ← "바이너리가 뜬다"는 뜻뿐이다. 아래 주석
+ALR CODEX LINKAGE:                KNOWN_FAIL:static-unhooked
+ALR PTY TMUX:                     PENDING_DEVICE  ← `tmux -V`만 PASS. 대화형 세션 미검증
 ```
+
+> **`ALR CODEX VERSION: PASS`가 뜻하지 않는 것.** codex 0.146.0은 **정적 링크 musl 바이너리**다
+> (`ET_EXEC`, `INTERP` 없음, `NEEDED` 없음, 269 MB). `LD_PRELOAD`가 원리적으로 닿지 않아 preload 가
+> **아예 로드되지 않고**(`ALR_LOG=2`에서 `alr preload:` 0줄, 대조로 `git`은 1줄), 경로 가상화가
+> 하나도 걸리지 않는다 — codex 의 모든 경로 연산은 rootfs 가 아니라 Android 파일시스템으로 간다
+> ([M12 §8](evidence/2026-08-03-m12-spawn-resolver.md)). 그래서 이 `PASS`는 "실행된다"이지
+> **"게스트 안에서 동작한다"가 아니다.** 이 상태를 추적하려고 `ALR CODEX LINKAGE`를 넣었고, 향후
+> 동적 빌드로 바뀌면 자동으로 `PASS`가 된다. [RISKS R7](RISKS.md)의 질문("codex 의 `rustix`
+> raw-syscall 백엔드가 인터포저를 무력화하는가")은 **YES 이며, 우려보다 나쁘다** — raw syscall 이전에
+> 링크 단계에서 이미 닿지 않는다.
+>
+> **`ALR CODEX SANDBOX DISABLED`에는 상태 토큰을 붙이지 않는다.** [RISKS R8](RISKS.md)의 절반은
+> 끝났다 — `alr`의 `with_codex()`는 `$R/root/.codex/config.toml`에
+> `sandbox_mode = "danger-full-access"`를 쓰고 `alr: NOTE codex sandbox disabled; alr is not a
+> security boundary`를 출력한다(`src/cli/alr.c`). 그러나 **철자가 아직 한 줄로 정리되지 않았다**:
+> [M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)은 CLI 플래그가 `--sandbox`이고 설정 키로
+> `sandbox_permissions`가 존재한다고 기록했는데, 우리가 쓰는 것은 `sandbox_mode`다. 게다가 codex 가
+> 정적 링크라 `$HOME`이 Android 쪽으로 새므로 — codex 자신의 경고
+> `could not create PATH aliases: Read-only file system (os error 30)`가 그 신호다 — **rootfs 안에
+> 쓴 그 파일을 codex 가 읽기는 하는지조차 확인되지 않았다.** 이걸 판정하려면 게스트 안에서 codex 의
+> 유효 설정을 되읽는 검사가 필요하다. 검사가 없는 이름에 `PASS`를 적지 않는다.
+>
+> **`ALR PTY TMUX`는 `PENDING_DEVICE`로 남긴다 — 남은 것이 무엇인지는 좁혀졌다.**
+> 검증된 것: `tmux -V` → `tmux 3.4`(폭 검사, [M11 §4](evidence/2026-08-02-m11-breadth.md)에서
+> `LOCPATH`로 UTF-8 로케일을 살린 뒤), 그리고 게스트가 `/dev/ptmx`로 직접 연 페어의 **ioctl 집합
+> 실측**([M14 §1](evidence/2026-08-03-m14-ioctl-php.md)) — `TCGETS` `TCSETS` `TIOCGWINSZ`
+> `TIOCSWINSZ` `FIONREAD` `TIOCOUTQ`는 그냥 허용이고, 거부되던 `TCGETS2` `TIOCGSID` `TIOCGETD`
+> `TIOCEXCL`은 번역으로 통과, `TIOCSTI`만 의도적으로 `EACCES`다. **미검증인 것: 실제 tmux 세션.**
+> 지금까지의 디바이스 세션이 전부 비대화형이었고 거기서는 `/dev/tty`가 `ENXIO`라
+> ([device-bringup](evidence/2026-08-02-device-bringup.md)), 대화형 경로를 밟은 적이 없다.
+> **판정 방법**: 실제 Termux 터미널 세션에서 `alr run tmux new -s t`로 붙어 창 분할·리사이즈까지
+> 해 보고 `/dev/tty` 가용성을 함께 기록한다. **막는 것**: 사람이 앉은 터미널 세션(현재 자동화가
+> 쓰는 비대화형 경로로는 재현되지 않는다).
 
 ### M8 — 성능
 ```
-ALR BENCH GIT STATUS vs PROOT:    <ratio>x
-ALR BENCH NPM CI vs PROOT:        <ratio>x
-ALR BENCH NODE COLD vs PROOT:     <ratio>x
-ALR BENCH EXEC THROUGHPUT:        <n> exec/s  (native/alr/proot)
-ALR MEDIATION INVARIANT:          path_traps=0 syscall_stops=0
+ALR BENCH GIT STATUS vs PROOT:    34.8x  MEASURED  native 42 / alr 49 / proot 1,704 ms
+ALR BENCH NPM CI vs PROOT:        3.12x  MEASURED  alr 2.00 / proot 6.24~6.87 s (105 패키지)
+ALR BENCH PROC STARTUP vs PROOT:  10.9x  MEASURED  /bin/true: native 24 / alr 28 / proot 304 ms
+ALR BENCH NODE COLD vs PROOT:     PENDING_DEVICE
+ALR BENCH EXEC THROUGHPUT:        PENDING_DEVICE
+ALR MEDIATION INVARIANT:          PASS   path_traps=0 syscall_stops=0  MEASURED
 ```
+
+> **PRoot A/B 는 실측됐다** ([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md),
+> [M12 §4](evidence/2026-08-03-m12-spawn-resolver.md)). §4.4가 "아무도 재지 못했다"고 적어 둔
+> 바로 그 숫자다. 초기에 `proot`가 자체 로더 초기화에서 실패한 것은 **우리 rootfs 와의 조합** 탓이었고,
+> proot-distro 를 자체 rootfs 로 돌리면 정상 동작한다.
+>
+> **`npm ci`는 동일 조건 A/B 다** — node 바이너리·npm·락파일·npm 캐시를 복사해 양쪽을 같게 만들었다.
+> `git status`의 34.8×를 약하게 만드는 "빌드가 다르다"는 반론이 여기에는 없다.
+>
+> **caveat (숫자를 인용할 때 같이 인용할 것)**: 단일 MediaTek MT8775 기기, 1회 세션, thermal 미고정.
+> `git status` 3자 비교는 git 빌드가 서로 다르다(2.55 / 2.43 / 2.53). `npm ci`의 proot 게스트는
+> Ubuntu 26.04, alr 게스트는 24.04다. 권장 표현은 [M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)의
+> 마지막 절에 그대로 적혀 있다.
+>
+> **`ALR MEDIATION INVARIANT`는 실측으로도 성립한다.** 위 `git status` 실행의 슈퍼바이저 통계가
+> `pids=21 sigsys=22 emulated=22 path_traps=0 syscall_stops=0`이었다. **PRoot 와 갈리는 선은
+> 실측에서 지켜졌다** — 격차의 본체가 바로 이것이다. 1,704 − 49 = 1,655 ms 를 경로 호출 9,912회로
+> 나누면 호출당 ≈167 µs 이고, alr 쪽 경로 계층 전체는 ≈40 µs 다.
+>
+> **남은 두 줄이 왜 `PENDING_DEVICE`인가.** 둘 다 기기가 아니라 **하네스가 없어서**다: `alr bench`는
+> 아직 없고 `bench/`에는 `microbench/rw_cost.c`와 `notif_cost.c`뿐이다. §4.3-1이 A/B 실측 전에는
+> 이 값을 `PENDING_DEVICE`로 두라고 규정하므로 그대로 둔다.
+> - `NODE COLD`: 판정 방법은 `npm ci`와 같다 — **같은 node 바이너리를 양쪽 게스트에 복사**하고
+>   `node -e 0`을 3회 워밍업 + 5회 측정, 중앙값. 그렇게 하지 않으면 배포판 차이를 재게 된다.
+> - `EXEC THROUGHPUT`: exec/s 자체는 잰 적이 없다. 위 `PROC STARTUP` 10.9×가 저해상도 프록시일 뿐이다.
+>   다만 [RISKS R5](RISKS.md)의 **판정 기준은 이미 충족됐다** — "`npm ci` 비율이 1.5배 미만이면
+>   히어로 벤치에서 내린다"였고 실측은 3.12×다. 즉 exec 오버헤드가 히어로를 잡아먹지 않았다.
 
 ## 3. Regression gate
 
 `bench/regression_gate.py`. CI와 온디바이스 스위트가 모두 실행한다.
+
+> ⚠️ **2026-08-03 현재 `bench/regression_gate.py`는 존재하지 않는다** — `bench/`에는
+> `microbench/rw_cost.c`와 `notif_cost.c`뿐이다. 지금 이 불변식들을 실제로 지키는 것은 흩어져 있다:
+> `path_traps`/`syscall_stops`는 디바이스 스위트의 `SUPERVISOR NO SYSCALL STOPS`가 매 실행 두 값을
+> 함께 확인하고(`sigsys_per_process`는 `SUPERVISOR SIGSYS PER RUN`), `rw_*_ns`는 **손으로 돌리는**
+> `bench/microbench/rw_cost.c`(`scripts/dev-push.sh`의 별도 타깃 — 스위트가 자동으로 돌리지 않는다),
+> `glibc_verneed_max`는 `scripts/check-preload.sh`의 `PRELOAD GLIBC VERNEED FLOOR`와
+> `scripts/make-release.sh`가 본다.
+> **`preload.malloc_calls == 0`을 검사하는 것은 아무것도 없다** (M4 주석 참조). 소프트 게이트의
+> "이전 최고 대비 +10%"도 이전 값을 보관하는 곳이 없어 실행되지 않는다. 이 절은 **명세이지 현재
+> 상태가 아니다.**
 
 **하드 불변식 — 어기면 즉시 실패:**
 ```
@@ -203,6 +323,11 @@ evidence       MEASURED | MODELED
 result         PASS | FAIL | KNOWN_FAIL:<reason>
 ```
 
+> 위는 **템플릿**이다 — `relative_to_proot` 줄의 `PENDING_DEVICE`는 어휘로 남겨 둔다. 다만 2026-08-03
+> 현재 `git_status_10k`(34.8×), `npm_ci`(3.12×), `/bin/true` 기동(10.9×, §2 M8의 `PROC STARTUP` —
+> `hello` 워크로드와 반복 횟수가 다르다) 세 항목은 실제 값을 갖는다. **새 리포트가 이 셋을 다시
+> `PENDING_DEVICE`로 내면 그건 회귀다.**
+
 ### 4.3 측정 규율
 
 1. **`MEASURED`와 `MODELED`를 절대 섞지 말 것.** A/B 실측 전에는 `relative_to_proot=PENDING_DEVICE`.
@@ -211,14 +336,33 @@ result         PASS | FAIL | KNOWN_FAIL:<reason>
 4. **동일 디바이스, 동일 세션, 동일 온도.** thermal throttling이 2배를 만든다.
 5. **`getenforce`와 `Seccomp:` 검증 없이는 결과를 발표하지 않는다.** permissive 디바이스는 zygote 필터가 아예 없어 모든 문제가 사라져 보인다.
 
-### 4.4 미측정 항목 — 반드시 채울 것
+### 4.4 A/B는 측정됐다 — 남은 미측정 항목
 
-상위 프로젝트가 **PRoot vs ALR A/B를 한 번도 측정하지 못했다** (SELinux가 APK의 rootfs 실행을 막아서). **Termux는 이 측정을 처음으로 가능하게 한다.** 이것이 M8의 핵심 산출물이고, 이 프로젝트가 상위 프로젝트에 되돌려줄 수 있는 가장 큰 증거다.
+상위 프로젝트는 **PRoot vs ALR A/B를 한 번도 측정하지 못했다** (SELinux가 APK의 rootfs 실행을 막아서).
+**Termux가 그것을 처음으로 가능하게 했고, 2026-08-02/03에 실측됐다.** 이것이 M8의 핵심 산출물이며,
+이 프로젝트가 상위 프로젝트에 되돌려주는 증거다.
 
-추가로 아직 아무도 공개하지 않은 숫자들:
-- `git status`의 proot vs native 격차 (정성적 보고만 존재)
-- V8 JIT + W^X mmap churn의 proot 오버헤드 분리
-- Node cold start의 proot 비용
+| 항목 | 결과 | 출처 |
+|---|---|---|
+| `git status` 10k — proot vs native | 1,704 ms vs 42 ms = **40.6×** (정성적 보고만 있던 격차) | [M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md) |
+| `git status` 10k — proot vs alr | **34.8×** | 동일 |
+| 프로세스 기동 — proot vs alr | **10.9×** (304 vs 28 ms) | 동일 |
+| `npm ci` — proot vs alr | **3.12×** (6.24~6.87 vs 1.99~2.00 s, 동일 바이너리·락파일·캐시) | [M12 §4](evidence/2026-08-03-m12-spawn-resolver.md) |
+| 경로 계층의 실제 비용 | `git status` 1회당 **≈40 µs** (호출 9,912회 중 재작성 26회) | [M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md) |
+
+> 마지막 줄이 이 표에서 가장 중요하다. **모델은 재작성 13,500회 × 61 ns = 0.82 ms 였고, 실측은 그보다
+> 20배 쌌다.** `p[0] != '/'`를 함수 첫 줄에 둔 판단이 호출의 99.7%를 3.9 ns에 처리한다. 즉 **alr 의
+> 오버헤드는 경로 계층이 아니다** — 56 ms 중 0.04 ms(0.07%)다. 나머지는 프로세스 기동(+8 ms)과
+> 서로 다른 git 빌드·libc 다.
+
+아직 아무도 재지 않은 것 (§4.3-1에 따라 `PENDING_DEVICE`로 둔다. 다만 **막는 것은 기기가 아니라
+하네스다** — 기기는 있고 `alr bench`가 없다):
+- **V8 JIT + W^X mmap churn 의 proot 오버헤드 분리.** 판정 방법: `node -e` 로 JIT 압력이 큰/없는
+  두 워크로드를 같은 node 바이너리로 양쪽에서 돌려 차이를 뺀다. 막는 것: `alr bench` 부재.
+- **Node cold start 의 proot 비용** (§2 M8 `ALR BENCH NODE COLD vs PROOT`).
+- **스냅드래곤 재측정.** 위 숫자는 전부 MediaTek MT8775 한 대에서 나왔다. SoC 가 바뀌면 ptrace 왕복
+  비용이 바뀔 수 있다 — 이 기기의 호출당 ≈167 µs 는 [§D1](01-platform-facts.md)의 5~20 µs 모델보다
+  크고, 그 자체로 별도 확인 가치가 있다.
 
 ## 5. 호환성 폭 (compatibility breadth)
 
@@ -234,8 +378,52 @@ result         PASS | FAIL | KNOWN_FAIL:<reason>
 
 M = 100으로 시작 (curated 목록: 빌드 툴체인, 언어 런타임, CLI 유틸). 이 숫자가 grun 대비 유일한 차별점이므로 **공개 발표의 헤드라인 지표**가 된다.
 
+**실측 (2026-08-03, Ubuntu 24.04)**: `tests/device/breadth.sh`, 큐레이션 96개.
+
+```
+ALR BREADTH: install=96/96 run=96/96
+```
+
+[M11](evidence/2026-08-02-m11-breadth.md)에서 96/96 설치 · 95/96 실행,
+[M14](evidence/2026-08-03-m14-ioctl-php.md)에서 96/96 실행으로 올랐고
+[M15](evidence/2026-08-03-m15-cmdline-2604.md)에서 회귀 없이 유지됐다. M 은 100이 아니라 96이다 —
+목록이 96개다.
+
+> ⚠️ **마지막 1건(`php-cli`)이 통과한 이유를 모른다.** preload 심볼 수가 152 근처의 임계값을 넘으면
+> 통과하고 아래면 `*** buffer overflow detected ***`로 죽는다. php 가 `--version`에서 쓸 수도 없는
+> 심볼(`scandir`) 하나만 빼도 재현되므로 **특정 심볼 가설은 반박됐다**. 남은 해석(미확인)은 Ubuntu 24.04
+> 의 `_FORTIFY_SOURCE=3` 검사가 런타임 할당 크기에 의존하므로 preload 크기가 힙 레이아웃을 흔든다는
+> 것이다. **이것을 "고쳤다"로 읽지 말 것** — 심볼을 덜어내는 변경이 php 를 다시 깨뜨릴 수 있고,
+> 그때 원인은 그 변경과 무관할 것이다 ([M14 §2](evidence/2026-08-03-m14-ioctl-php.md)).
+>
+> **이 숫자는 Ubuntu 24.04 에 대한 것이다.** 26.04 는 설치·부팅·apt 까지 되지만 **uutils(Rust)
+> coreutils 계열이 전부 깨진다** — 인라인 `svc` 74개짜리 raw-syscall 바이너리라 인터포저가 닿지 않고,
+> [ADR 0006](adr/0006-raw-syscall-binaries.md)이 이를 **비목표**로 확정했다
+> ([M15 §2](evidence/2026-08-03-m15-cmdline-2604.md)). 26.04 로 폭을 재면 다른 지표다.
+
 ## 6. 숨은 비용 — 발표 전 반드시 측정
 
 [§B1/§B3](01-platform-facts.md): `untrusted_app_27` 도메인은 `execute`와 `execute_no_trans` 양쪽에 `auditallow`가 걸려 있다. **게스트의 모든 execve와 모든 `.so` 매핑이 logd에 감사 레코드를 남긴다.** Node 프로세스 하나가 시작 시 `.so` ~40개를 매핑하면 레코드 ~40개다.
 
 exec 집약 워크로드(`git rebase`, npm postinstall)에서 `logcat -b events` 볼륨을 측정한다. **이것이 PRoot 대비 이 설계의 지배적 숨은 비용일 수 있다.** 오버헤드 주장을 발표하기 전에 수치를 확보한다.
+
+**상태: `PENDING_DEVICE`. 기기는 있는데 관측 지점이 없다** ([RISKS R6](RISKS.md)).
+
+2026-08-03에 확인한 것: **Termux 앱 프로세스 안에서는 이 측정이 불가능하다.**
+
+```
+logcat -b events -d    → 0줄, 에러 메시지 없음
+logcat -b main   -d    → 정상 출력
+```
+
+`main` 버퍼는 읽히는데 `events` 버퍼만 빈다. **조용히 비는 것이 이 실패의 고약한 점이다** — 거부라고
+말해 주지 않으므로 "레코드가 없다"로 오독하기 딱 좋다.
+
+> ⚠️ **0줄을 "오버헤드 없음"으로 읽지 말 것.** 그건 측정이 아니라 권한 실패다. 감사 레코드는 우리가
+> 못 읽을 뿐 여전히 남는다. 이 문단은 다음 사람이 그 실수를 하지 않도록 있다.
+
+**판정 방법**: 외부 관측자가 필요하다 — adb 로 호스트에서 `logcat -b events` 를 열어 두고, 워크로드는
+Termux 안에서 돌린다. exec 집약(`git rebase`, npm postinstall)을 native / alr / proot-distro 세 갈래로
+돌려 레코드 수와 실행 시간을 함께 기록한다. **막는 것**: adb 를 붙일 수 있는 호스트(현재 세션은 기기
+안에서만 돈다). 이 수치가 나오기 전까지 §2 M8 의 배수는 **로그 비용을 포함한 실측**임을 밝히고
+인용한다 — 34.8×·10.9×·3.12× 는 이미 감사 레코드를 치르고 나온 숫자다.
