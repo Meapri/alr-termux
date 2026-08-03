@@ -211,7 +211,7 @@ ALR_LOG=2 alr run …/codex --version | grep -c 'alr preload:' → 0    (대조:
 
 → 아래 §4의 **"정적 링크 게스트 바이너리"** 및 바로 그 아래 codex 행으로 이관. `KNOWN_FAIL:unhooked-static-binary`.
 
-### R8. Codex 샌드박스 비활성화 키 — `PENDING_DEVICE` (쓰기는 확인, 읽히는지는 미확인)
+### ~~R8. Codex 샌드박스 비활성화 키~~ — **해소** ✅ `MEASURED` (읽힐 수 없음이 확정)
 
 **alr 이 실제로 하는 일** (`src/cli/alr.c` `with_codex()`, 2026-08-03 실측):
 `<R>/root/.codex/config.toml` 에 228 바이트를 쓴다 — `sandbox_mode = "danger-full-access"` 와 주석 3줄. 파일은 정상적으로 생성된다.
@@ -230,7 +230,19 @@ ALR_LOG=2 alr run …/codex --version | grep -c 'alr preload:' → 0    (대조:
 
 **결과적으로 `alr` 의 출력 문구를 고쳤다.** 이전에는 `NOTE codex sandbox disabled` 라고 단정했는데, 그건 우리가 아는 것보다 많은 주장이다. 지금은 "파일을 썼고, codex 가 그것을 읽는지 확인할 수 없으며, 어느 쪽이든 게스트는 샌드박스되지 않은 것으로 취급하라" 고 말한다.
 
-**무엇이 이것을 끝내는가**: config 를 실제로 소비하는 codex 명령을 인증된 세션에서 한 번 돌리고, 잘못된 모드 값에 대해 에러를 내는지 본다. 또는 정적 바이너리라 `strace` 로 실제 open 경로를 보는 것(preload 로는 불가).
+**끝났다 — 2026-08-03 실측.** 인증 세션도 `strace` 도 필요 없었다. `-e` 옵션이 생겨 `HOME` 을 바꿔 넣을 수 있게 되자 **차이가 바로 드러났다**:
+
+| 실행 | 결과 |
+|---|---|
+| `alr run codex --version` (기본 `HOME=/root`) | `WARNING: ... could not create PATH aliases: Read-only file system` |
+| `alr run -e HOME=$HOME/codexhome codex --version` | **경고 없음**, 그리고 그 디렉토리에 `.codex` 를 **생성** |
+
+즉 codex 는 `~/.codex` 를 **Android 기준**으로 풀고, 기본 `HOME=/root` 에서는 Android 에 `/root` 가 없어 **디렉토리를 만들지도 못한다.** 따라서 `alr` 이 `<R>/root/.codex/config.toml` 에 쓰는 파일은 **codex 가 절대 볼 수 없는 위치**에 있다. "읽히는지 미확인" 이 아니라 **읽힐 수 없다.**
+
+**결과**:
+1. `alr` 의 NOTE 가 이 사실을 그대로 말하고, **동작하는 호출 방법**을 같이 알려 준다 — `alr run -e HOME=$HOME/codexhome /usr/local/bin/codex`.
+2. 파일 쓰기 자체는 남긴다(무해하고 의도를 기록한다). 다만 그것이 codex 가 읽는 파일이 **아니라고** 명시한다.
+3. codex 는 [ADR 0008](adr/0008-static-guest-binaries-non-goal.md) 로 비목표가 되었으므로, 이 항목은 목표에 대한 리스크가 아니라 **사용법 기록**이다.
 
 
 ### ~~R14. preload SIGSEGV~~ — **근본 원인 확정 및 수정** ✅

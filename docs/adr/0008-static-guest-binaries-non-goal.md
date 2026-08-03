@@ -18,6 +18,15 @@ Accepted (2026-08-03).
 
 - G5 는 **`node` / `npm`** 으로 정의되고, 그 기준으로 **달성**이다(`npm ci` 실측 proot-distro 대비 3.12×, [M12](../evidence/2026-08-03-m12-spawn-resolver.md)).
 - `alr install --with codex` 는 **남긴다.** 설치는 되고 실행도 되며, 원하는 사람이 있다. 다만 **경로 가상화 없이 도는 것을 알고 쓰는 것**이고, `alr` 이 그렇게 말한다.
+
+> **쓸 수 있는가? — 쓸 수 있다. 게스트 rootfs 를 보지 못할 뿐이다.** `MEASURED` 2026-08-03:
+>
+> | 실행 | 결과 |
+> |---|---|
+> | `alr run codex --version` | `WARNING: ... could not create PATH aliases: Read-only file system` |
+> | `alr run -e HOME=$HOME/codexhome codex --version` | **경고 없음**, `.codex` 정상 생성 |
+>
+> codex 는 경로를 **Android 기준**으로 푼다. 기본 `HOME=/root` 는 Android 에 없으므로 실패하고, **Android 에서 보이는 경로**를 주면 정상 동작한다. 즉 게스트 rootfs 안의 프로젝트에는 쓸 수 없지만, **Termux 홈의 프로젝트에는 쓸 수 있다.** 이것이 [RISKS R8](../RISKS.md) 도 함께 답했다 — `alr` 이 rootfs 안에 쓰던 config 는 codex 가 **볼 수 없는 위치**였다.
 - 수용 시험의 `ALR CODEX LINKAGE` 는 `KNOWN_FAIL` 이 아니라 **관찰 라인**이다. `KNOWN_FAIL` 은 "원하는데 안 된다" 를 뜻하는데, 이제 원하지 않는다.
 
 ## Rationale

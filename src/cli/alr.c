@@ -498,10 +498,27 @@ static int with_codex(const char *R, const char *cache)
          * reach (M12 §8), so it resolves ~/.codex against ANDROID's root, and
          * Android has no /root.  Saying "sandbox disabled" would assert more
          * than the evidence supports. */
-        printf("alr: NOTE wrote %s/root/.codex/config.toml requesting a disabled\n"
-               "     sandbox. codex is statically linked, so alr cannot confirm it\n"
-               "     reads that file -- treat the guest as UNSANDBOXED either way.\n"
-               "     alr is not a security boundary.\n", R);
+        /* MEASURED 2026-08-03, and it settles RISKS R8: codex CANNOT read the
+         * file written above.  With the default HOME=/root it prints
+         *   WARNING: ... could not create PATH aliases: Read-only file system
+         * because it resolves /root against ANDROID, which has no /root.  Give
+         * it an Android-visible HOME and the warning disappears and it creates
+         * ~/.codex there:
+         *   alr run -e HOME=$HOME/codexhome /usr/local/bin/codex ...
+         * So the rootfs copy is written where codex will never look.  It is
+         * kept because it costs nothing and documents intent, but the NOTE now
+         * says plainly that it is not the file codex reads. */
+        printf("alr: NOTE codex is statically linked, so path virtualization does\n"
+               "     NOT apply to it -- it resolves paths against Android, not the\n"
+               "     guest (ADR 0008: codex is a non-goal).\n"
+               "     MEASURED: with the default HOME=/root it cannot even create\n"
+               "     ~/.codex, because Android has no /root.  The config written\n"
+               "     to %s/root/.codex/config.toml is therefore NOT the file codex\n"
+               "     reads.\n"
+               "     To actually run it, give it an Android-visible HOME:\n"
+               "         alr run -e HOME=$HOME/codexhome /usr/local/bin/codex\n"
+               "     Treat the guest as UNSANDBOXED either way -- alr is not a\n"
+               "     security boundary.\n", R);
     }
     return 0;
 }
