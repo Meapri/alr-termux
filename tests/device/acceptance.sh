@@ -103,6 +103,24 @@ ck  "CLI ENV BEATS INHERITED"    wins           env FOO=inherited $ALR run -e FO
 ck  "CLI WORKDIR OPTION"         /usr/lib       $ALR run -w /usr/lib /bin/pwd
 ck  "CLI WORKDIR SETS PWD"       /usr/lib       $ALR run -w /usr/lib /bin/sh -c 'echo $PWD'
 ck  "CLI EXEC DDASH"             exec-ok        $ALR exec -- /bin/echo exec-ok
+# -w goes through alr_rw(), the one rewriter.  Hand-concatenating root+path
+# skipped the ".."-pops-at-root clamp and `-w /../..` chdir'd ABOVE the rootfs.
+ck  "CLI WORKDIR CLAMPS DOTDOT"  /              $ALR run -w /../.. /bin/pwd
+ck  "CLI WORKDIR NORMALIZES"     /etc           $ALR run -w /root/../etc /bin/pwd
+ck  "CLI WORKDIR PWD CANONICAL"  /etc           $ALR run -w /root/../etc /bin/sh -c 'echo $PWD'
+ck  "CLI WORKDIR SYSDIR PASS"    /proc          $ALR run -w /proc /bin/pwd
+# A -e must REPLACE alr's own value, not sit beside it: envp allows duplicate
+# keys, getenv(3) takes the first and bash takes the last.
+ck  "CLI ENV REPLACES DEFAULT"   /zzz           $ALR run -e PATH=/zzz /bin/sh -c 'echo $PATH'
+# Absolute paths throughout: the point of this case is PATH=/zzz, so anything
+# resolved THROUGH PATH (grep) would not be found and the check would fail on
+# its own setup rather than on the behaviour.
+ck  "CLI ENV NO DUPLICATE"       1              $ALR run -e PATH=/zzz /bin/sh -c '/usr/bin/env | /bin/grep -c "^PATH="'
+ckrc "CLI ENV LOCPATH RESERVED"  125            $ALR run -e LOCPATH=/x /bin/true
+# The host OLDPWD is a Termux path; leaked, `cd -` lands on <R>/data/... and
+# fails with a bare ENOENT that reads as a corrupt rootfs.
+ck  "CLI OLDPWD NOT INHERITED"   unset          env OLDPWD=/data/data/com.termux/files/home $ALR run /bin/sh -c 'echo ${OLDPWD:-unset}'
+ck  "CLI PWD STILL SET"          /root          env OLDPWD=/data/data/com.termux/files/home $ALR run /bin/sh -c 'echo $PWD'
 ckrc "CLI ENV RESERVED REFUSED"  125            $ALR run -e ALR_ROOT=/evil /bin/true
 ckrc "CLI BAD OPTION REFUSED"    125            $ALR run --bogus /bin/true
 # cwd mapping falls back to /root when the host cwd is outside the rootfs

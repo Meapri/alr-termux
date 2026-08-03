@@ -1077,7 +1077,12 @@ static int env_is_reserved(const char *kv)
 {
     return !strncmp(kv, "ALR_", 4)
         || !strncmp(kv, "LD_PRELOAD=", 11)
-        || !strncmp(kv, "LD_LIBRARY_PATH=", 16);
+        || !strncmp(kv, "LD_LIBRARY_PATH=", 16)
+        /* Also load-bearing: LOCPATH is how the guest finds its only generated
+         * locale (without it tmux refuses to start), and GLIBC_TUNABLES is how
+         * rseq is disabled before ld.so would trip the zygote filter. */
+        || !strncmp(kv, "LOCPATH=", 8)
+        || !strncmp(kv, "GLIBC_TUNABLES=", 15);
 }
 
 /* Parse the common options in place.  Returns the index of the first
@@ -1101,8 +1106,8 @@ static int parse_runopts(int argc, char **argv, struct runopts *ro,
                 die("bad-env", "-e needs KEY=VAL");
             if (env_is_reserved(kv))
                 die("env-reserved",
-                    "-e cannot set an ALR_*/LD_PRELOAD/LD_LIBRARY_PATH key; "
-                    "alr owns those");
+                    "-e cannot set ALR_*, LD_PRELOAD, LD_LIBRARY_PATH, LOCPATH "
+                    "or GLIBC_TUNABLES; alr owns those");
             if (ro->nenv >= ALR_MAX_USER_ENV)
                 die("too-many-env", "too many -e options");
             ro->envs[ro->nenv++] = kv;
@@ -1151,7 +1156,13 @@ static char **build_env(const struct launch *L, const char *guest_exe,
          * $PWD when it names the current directory, so leaving the host value
          * in place makes the guest disagree with itself. */
         if (klen ==  3 && !memcmp(environ[i], "PWD", 3)) continue;
-        if (klen ==  7 && !memcmp(environ[i], "OLDPWD", 6)) continue;
+        /* alr_split_env returns the KEY length: 6 for "OLDPWD=...".  This
+         * read `klen == 7` and so never fired, and the neighbouring PWD line
+         * being correct is what made it invisible.  A leaked OLDPWD is a
+         * Termux absolute path, so `cd -` in the guest goes to
+         * <R>/data/data/... and fails with a bare ENOENT that reads as a
+         * corrupt rootfs. */
+        if (klen ==  6 && !memcmp(environ[i], "OLDPWD", 6)) continue;
         if (klen ==  8 && !memcmp(environ[i], "ALR_ROOT", 8)) continue;
         /* The guest rootfs has only C.UTF-8 generated; an inherited
          * LANG=en_US.UTF-8 makes every perl/dpkg invocation emit a locale
@@ -1175,8 +1186,25 @@ static char **build_env(const struct launch *L, const char *guest_exe,
         env[n++] = environ[i];
     }
 
+/* True when a user -e already provides this key. */
+#define USER_SET(entry) ({                                                    \
+        int _s = 0;                                                           \
+        if (ro) { const char *_v; size_t _k = alr_split_env((entry), &_v);     \
+            int _u; for (_u = 0; _u < ro->nenv; _u++) {                       \
+                const char *_uv; size_t _ul = alr_split_env(ro->envs[_u], &_uv); \
+                if (_ul == _k && !memcmp((entry), ro->envs[_u], _k)) { _s = 1; break; } } } \
+        _s; })
+
+/* Skip anything the user overrode with -e.
+ *
+ * Emitting both is not harmless: envp allows duplicate keys, getenv(3) takes
+ * the FIRST and bash's import loop takes the LAST, so `-e PATH=/x` gave C
+ * programs /x and shells the default -- MEASURED, two PATH entries in envp and
+ * `sh -c 'echo $PATH'` printing alr's value.  That is verbatim the divergence
+ * the comment above memorializes as having cost a day on dpkg. */
 #define PUT(fmt, ...) do { \
-        snprintf(bufs[b], ALR_PBUF, fmt, __VA_ARGS__); env[n++] = bufs[b++]; \
+        snprintf(bufs[b], ALR_PBUF, fmt, __VA_ARGS__); \
+        if (!USER_SET(bufs[b])) env[n++] = bufs[b++]; \
     } while (0)
 
     /* User -e first: these are plain pointers into argv, no buffer needed, and
@@ -1360,9 +1388,31 @@ static int cmd_run(const char *distro, int argc, char **argv, int login_shell,
         }
         if (guest_wd[0] != '/')
             die("bad-workdir", "-w takes an absolute GUEST path");
-        snprintf(target, sizeof target, "%s%s", L.root,
-                 !strcmp(guest_wd, "/") ? "" : guest_wd);
-        snprintf(g_guest_cwd, sizeof g_guest_cwd, "%s", guest_wd);
+        /* Route through alr_rw() -- the ONE rewriter.
+         *
+         * This used to be snprintf("%s%s", root, guest_wd), a second rewriter
+         * in the CLI, which alr_path_rule.h's own header forbids by name.  It
+         * skipped alr_normalize_guest_abs()'s clamp, whose whole job is that
+         * ".." pops to nothing at the root -- so `-w /../..` chdir'd ABOVE the
+         * rootfs.  MEASURED: `alr run -w /../.. /bin/pwd` printed
+         * /data/data/com.termux/files/home, and every relative open in that
+         * run then resolved outside the guest.
+         *
+         * alr_rw also leaves /proc,/sys,/dev alone, so `-w /proc` lands on the
+         * real one instead of a rootfs directory that does not exist. */
+        {
+            const char *hw = alr_rw(guest_wd, L.root, L.root_len,
+                                    target, sizeof target, NULL);
+            const char *cw;
+            char cbuf[ALR_PBUF];
+            if (!hw) die("bad-workdir", "-w path too long");
+            if (hw != target) snprintf(target, sizeof target, "%s", hw);
+            /* $PWD must be the CANONICAL guest view, not the string the user
+             * typed: otherwise `-w /root/../etc` sets PWD=/root/../etc while
+             * getcwd(3) reports /etc and the guest disagrees with itself. */
+            cw = alr_guest_canon(target, L.root, L.root_len, cbuf, sizeof cbuf);
+            snprintf(g_guest_cwd, sizeof g_guest_cwd, "%s", cw ? cw : guest_wd);
+        }
         if (chdir(target) != 0) {
             /* Do not fall back silently: a command that runs in an unexpected
              * directory produces wrong output rather than an error. */
