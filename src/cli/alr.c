@@ -679,6 +679,22 @@ static int verify_sha256(const char *file, const char *want)
 /* Report enough to make a bug report actionable: three separate incidents in
  * this project's evidence docs were "the deployed binary was not what I
  * thought", so print the preload's hash rather than merely its path. */
+/* sha256 of a file, or "" if unreadable.  popen'd because there is no hash in
+ * libc and pulling one in for a version banner is not worth the code. */
+static void file_sha256(const char *path, char *out, size_t outsz)
+{
+    char cmd[ALR_PBUF + 64];
+    FILE *fp;
+    out[0] = '\0';
+    if (!path || !*path || access(path, R_OK) != 0) return;
+    snprintf(cmd, sizeof cmd, "sha256sum '%s' 2>/dev/null", path);
+    if ((fp = popen(cmd, "r"))) {
+        if (fscanf(fp, "%79s", out) != 1) out[0] = '\0';
+        pclose(fp);
+    }
+    (void)outsz;
+}
+
 static int cmd_version(void)
 {
     char path[ALR_PBUF], cmd[ALR_PBUF + 64], sha[80];
@@ -710,14 +726,80 @@ static int cmd_version(void)
             if (fscanf(fp, "%79s", sha) != 1) sha[0] = '\0';
             pclose(fp);
         }
-        printf("preload %s\n", path);
-        if (*sha) printf("sha256  %s\n", sha);
+        printf("preload (host)  %s\n", path);
+        if (*sha) printf("  sha256       %s\n", sha);
     } else {
-        printf("preload (not found)\n");
+        printf("preload (host)  (not found)\n");
     }
-    { char r[ALR_PBUF];
+
+    /* THE ONE THAT MATTERS: the copy the guest actually loads.
+     *
+     * install_preload() copies the .so into <R>/usr/lib/alr once, and
+     * cmd_install returns early when the rootfs already exists -- so upgrading
+     * alr (untar over $PREFIX, docs/INSTALL.md) leaves the OLD preload in the
+     * rootfs while this command reported the NEW one's hash.  MEASURED on
+     * 2026-08-03: guest 48efc48b..., reported 16167c4e...  The whole point of
+     * this command is preload identity, and it was reporting an identity that
+     * was not in use.
+     *
+     * INSTALL.md's check could not catch it either: it compares
+     * $PREFIX/share/alr/manifest.json against this output, and both sides read
+     * $PREFIX.  That is a tautology.  Compare against the GUEST copy. */
+    { char r[ALR_PBUF], gp[ALR_PBUF], gsha[80];
       distro_root(r, sizeof r, getenv("ALR_DISTRO"));
-      printf("rootfs  %s%s\n", r, is_dir(r) ? "" : "  (not installed)"); }
+      printf("rootfs  %s%s\n", r, is_dir(r) ? "" : "  (not installed)");
+      if (is_dir(r)) {
+          snprintf(gp, sizeof gp, "%s/usr/lib/alr/libalr_preload.so", r);
+          file_sha256(gp, gsha, sizeof gsha);
+          if (*gsha) {
+              printf("preload (guest) %s\n", gp);
+              printf("  sha256       %s\n", gsha);
+              if (*sha && strcmp(sha, gsha) != 0) {
+                  printf("\n"
+                     "  !! MISMATCH: the guest loads a DIFFERENT build than this\n"
+                     "     alr shipped.  Everything you run is using the guest\n"
+                     "     copy, not the one above.\n"
+                     "     reason=preload-stale\n"
+                     "     Fix:  alr update-components\n");
+                  return 1;
+              }
+          } else {
+              printf("preload (guest) (missing -- run `alr update-components`)\n"
+                     "  reason=preload-missing-in-rootfs\n");
+              return 1;
+          }
+      }
+    }
+    return 0;
+}
+
+/* `alr update-components [<distro>]` -- docs/05-provisioning-spec.md.
+ *
+ * It exists because the .so the guest loads is a COPY made at install time,
+ * and the documented upgrade path (untar a new release over $PREFIX) does not
+ * touch it.  Without this there is no way to refresh it short of deleting the
+ * rootfs -- which the spec names as exactly the reason this command matters:
+ * "`.so`를 고칠 때마다 rootfs를 다시 깔 이유가 없다". */
+static int cmd_update_components(const char *distro)
+{
+    char R[ALR_PBUF], gp[ALR_PBUF], before[80], after[80];
+
+    distro_root(R, sizeof R, distro);
+    if (!is_dir(R))
+        die("rootfs-missing", "rootfs not installed; run `alr install`");
+
+    snprintf(gp, sizeof gp, "%s/usr/lib/alr/libalr_preload.so", R);
+    file_sha256(gp, before, sizeof before);
+
+    if (install_preload(R) != 0)
+        die("preload-install-failed", "could not refresh the guest preload");
+
+    file_sha256(gp, after, sizeof after);
+    if (*before && *after && !strcmp(before, after))
+        printf("alr: guest preload already current (%s)\n", after);
+    else
+        printf("alr: guest preload updated\n  was %s\n  now %s\n",
+               *before ? before : "(absent)", *after ? after : "(absent)");
     return 0;
 }
 
@@ -735,7 +817,22 @@ static int cmd_install(const char *distro, const char *url_override)
     snprintf(cache, sizeof cache, "%s/var/lib/alr/cache", prefix());
     snprintf(tarball, sizeof tarball, "%s/%s.tar.gz", cache, distro);
 
-    if (is_dir(R)) { fprintf(stderr, "alr: %s already installed\n", R); return 0; }
+    if (is_dir(R)) {
+        /* Used to return 0 and silently drop --with, so
+         * `alr install -d x --with node && alr run node` failed confusingly.
+         * Say what was ignored and what to do instead. */
+        fprintf(stderr, "alr: %s already installed\n", R);
+        if (g_with)
+            fprintf(stderr,
+                "  NOTE --with %s was IGNORED: this rootfs already exists.\n"
+                "  reason=already-installed\n"
+                "  Install components into it with `alr run apt-get install ...`,\n"
+                "  or remove the rootfs and install again.\n", g_with);
+        fprintf(stderr,
+            "  (to refresh the guest preload after upgrading alr:"
+            " `alr update-components`)\n");
+        return 0;
+    }
 
     mk[0] = (char *)"mkdir"; mk[1] = (char *)"-p"; mk[2] = cache; mk[3] = NULL;
     run_cmd(mk);
@@ -1350,6 +1447,7 @@ static void usage(void)
         "  run [opts] <cmd> [args...]         run one guest command\n"
         "  exec [opts] -- <cmd> [args...]     run, with -- ending option parsing\n"
         "  shell [opts]                       interactive guest shell\n"
+        "  update-components [<distro>]       refresh the guest preload copy\n"
         "  version                            version and preload identity\n"
         "  doctor [probe-dir]                 device capability report\n"
         "\n"
@@ -1413,6 +1511,8 @@ int main(int argc, char **argv)
     }
     if (!strcmp(argv[i], "version") || !strcmp(argv[i], "--version"))
         return cmd_version();
+    if (!strcmp(argv[i], "update-components"))
+        return cmd_update_components((i + 1 < argc) ? argv[i + 1] : distro);
     if (!strcmp(argv[i], "doctor")) {
         /* docs/06-cli-spec.md §3 lists `alr doctor`.  It is a separate binary
          * because it must run BEFORE any rootfs exists and probes the host, not

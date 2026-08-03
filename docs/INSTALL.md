@@ -118,8 +118,22 @@ README.md
 Android 파일시스템을 보게 된다 — 즉 정상 동작이 아니다.
 
 `alr version`은 버전, preload 경로, preload의 `sha256`, rootfs 경로를 출력한다.
-`share/alr/manifest.json`의 `output_sha256` 과 `alr version`의 `sha256` 줄이 **같아야 한다.** 다르면
-설치가 섞인 것이다(옛 preload가 `$PREFIX/share/alr/`에 남아 있는 등).
+`alr version` 이 **두 줄**을 낸다 — `preload (host)` 와 `preload (guest)`. **둘의 sha256 이 같아야 한다.**
+
+```
+preload (host)  .../share/alr/libalr_preload.so
+  sha256       16167c4e...
+preload (guest) .../ubuntu-24.04/usr/lib/alr/libalr_preload.so
+  sha256       16167c4e...      ← 같아야 한다
+```
+
+다르면 `alr` 은 업그레이드됐는데 **게스트는 옛 preload 를 계속 로드**하고 있는 것이다. `alr version` 이 `reason=preload-stale` 로 알려 주고 exit 1 을 낸다:
+
+```bash
+alr update-components
+```
+
+> ⚠️ **이전 판의 검증 절차는 동어반복이었다.** `share/alr/manifest.json` 의 `output_sha256` 을 `alr version` 과 비교하라고 했는데, **양쪽 다 `$PREFIX` 를 읽는다.** 게스트가 로드하는 사본은 rootfs 안에 따로 있고, 그것이 어긋나는 것이 실제로 일어나는 사고다 — 문서가 시키는 업그레이드(`$PREFIX` 에 새 tarball 풀기)가 rootfs 안 사본을 건드리지 않기 때문이다.
 
 > ⚠️ **소스에서 재빌드해 해시를 대조하려면 릴리스와 같은 호스트 OS 가 필요하다** — `MEASURED` 2026-08-03.
 > 같은 소스·같은 zig 0.16.0 이 macOS 에서 `b30dd81e…`, 릴리스 러너(Linux)에서 `16167c4e…` 를 낸다.

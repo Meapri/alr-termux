@@ -108,6 +108,30 @@ ckrc "CLI BAD OPTION REFUSED"    125            $ALR run --bogus /bin/true
 # cwd mapping falls back to /root when the host cwd is outside the rootfs
 ck  "CLI CWD FALLBACK"           /root          $ALR run /bin/pwd
 
+# The identity `alr version` reports must be the one the guest LOADS.  It was
+# not: install_preload() copies the .so into the rootfs once and cmd_install
+# returns early when the rootfs exists, so upgrading alr left the old copy in
+# place while `alr version` printed the new hash (MEASURED 2026-08-03, guest
+# 48efc48b vs reported 16167c4e).  The restore is unconditional -- a failure
+# here must not leave the rootfs running a stale preload for every later check.
+ckc "CLI VERSION SHOWS GUEST PRELOAD" "preload (guest)" $ALR version
+_gp="$R/usr/lib/alr/libalr_preload.so"
+if [ -r "$_gp" ] && [ -r "$PREFIX/share/alr/libalr_preload.so" ] \
+   && ! cmp -s "$_gp" "$PREFIX/share/alr/libalr_preload.so"; then
+    cp "$_gp" "$TMPDIR/.alr-preload-save" 2>/dev/null
+    cp "$PREFIX/share/alr/libalr_preload.so" "$_gp" 2>/dev/null
+    "$ALR" version >/dev/null 2>&1; _rc=$?
+    cp "$TMPDIR/.alr-preload-save" "$_gp" 2>/dev/null; rm -f "$TMPDIR/.alr-preload-save"
+    [ "$_rc" = 1 ] && emit "CLI VERSION DETECTS STALE PRELOAD" PASS \
+                   || emit "CLI VERSION DETECTS STALE PRELOAD" FAIL "rc=$_rc want=1"
+    cmp -s "$_gp" "$PREFIX/share/alr/libalr_preload.so" \
+        && emit "CLI VERSION TEST RESTORED" FAIL "rootfs left with the wrong .so" \
+        || emit "CLI VERSION TEST RESTORED" PASS
+else
+    emit "CLI VERSION DETECTS STALE PRELOAD" SKIP "no second .so to swap in"
+fi
+ckrc "CLI UPDATE COMPONENTS"     0  $ALR update-components
+
 echo "── M4 경로 가상화 ──"
 ckc "PRELOAD GUEST ETC"          "Ubuntu 24.04" $ALR run /bin/cat /etc/os-release
 ck  "PRELOAD PROC SELF EXE"      /bin/readlink  $ALR run /bin/readlink /proc/self/exe
