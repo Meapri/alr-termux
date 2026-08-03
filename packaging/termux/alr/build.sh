@@ -34,7 +34,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 TERMUX_PKG_HOMEPAGE=https://github.com/Meapri/alr-termux
-TERMUX_PKG_DESCRIPTION="Run stock Ubuntu 24.04 arm64 glibc programs in Termux without root"
+TERMUX_PKG_DESCRIPTION="Android 16 only. Run stock Ubuntu 24.04 arm64 glibc programs in Termux without root"
 TERMUX_PKG_LICENSE="MIT"
 TERMUX_PKG_LICENSE_FILE="LICENSE"
 TERMUX_PKG_MAINTAINER="@Meapri"

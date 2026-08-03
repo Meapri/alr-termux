@@ -11,7 +11,7 @@
 **2026-08-02 실측 (SM-X236N, Android 16, `untrusted_app_27`, `Seccomp=2`): 둘 다 `allowed`.**
 근거: [evidence/2026-08-02-device-bringup.md](evidence/2026-08-02-device-bringup.md).
 
-`alr doctor` P10이 계속 검사하며, 차단된 기기를 만나면 여전히 **크게 실패**한다. Android 12~15 기기에서 재확인 필요하나 Fatal 등급에서는 내린다.
+`alr doctor` P10이 계속 검사하며, 차단된 기기를 만나면 여전히 **크게 실패**한다. Fatal 등급에서는 내린다. (구버전 Android 재확인 조건은 [ADR 0007](adr/0007-android-16-only.md) 로 삭제됐다 — P10 런타임 검사는 그대로 남는다.)
 
 ### R2. targetSdk 28 앱의 설치 자체가 막힘 — **이미 현실화됨** ⚠️
 
@@ -276,7 +276,7 @@ msgget : Function not implemented
 
 게스트 일반에 대한 영향은 제한적이다 — 대상 워크로드 중 SysV IPC를 쓰는 것이 없고, 쓰는 소프트웨어(일부 DBMS, X11 MIT-SHM)는 애초에 비목표다. `ENOSYS`는 라이브러리가 폴백 경로를 타게 하는 표준 신호이기도 하다.
 
-### R10. 하드링크가 일부 디바이스에서는 동작할 수 있음 — `PENDING_DEVICE` (이 기기에서는 답이 나왔다)
+### R10. 하드링크가 일부 디바이스에서는 동작할 수 있음 — **해소** (범위 결정으로 닫힘)
 
 **이 기기에서는 실패한다.** `alr doctor` P6이 같은 디렉토리 `link(2)`에 **`EACCES`**를 보고했다 ([device-bringup](evidence/2026-08-02-device-bringup.md)). rootfs를 앱 사설 저장소에 풀 때 tar가 하드링크 항목에서 실패하는 것과 정확히 일치한다 ([M3](evidence/2026-08-02-m3-first-boot.md)) — 그 경고를 흘려보내면 `perl5.38.2`와 `uncompress`가 없는 **조용히 깨진 rootfs**가 된다. 따라서 link2symlink 계층은 이 기기에서 **켜져 있고, 끌 수 없다.**
 
@@ -288,13 +288,11 @@ msgget : Function not implemented
 
 설치 로그도 같은 말을 한다 — `hardlink members: 0 linked, 2 copied, 0 failed`(24.04), `0 linked, 115 copied`(26.04). 링크가 되는 항목이 **한 건도 없다.**
 
-**결과**: 벤더·커널·스토리지 스택이 갈려도 결과가 같으므로, link2symlink 계층은 **끄지 않는다.** 런타임 스위치(`state/<name>/doctor.json` 의 `link2symlink`, [04-preload-spec.md §8](04-preload-spec.md))는 남겨 두되 기본값은 켜짐이다.
+**결과**: 벤더·커널·스토리지 스택이 갈려도 결과가 같으므로, 하드링크 폴백은 **끄지 않는다.**
 
-**그럼에도 마커를 완전히 지우지는 않는다**: 두 기기 모두 **Android 16** 이다. 이 제약은 앱 사설 저장소에 대한 SELinux/커널 정책에서 오고, 정책은 릴리스마다 바뀐다. 근거는 이제 Android 10~16 정책 검토 + Android 11/12 직접 관찰 + Android 16 기기 2대다. **"Android 16 에서는 벤더 무관하게 FAIL, 구버전 릴리스에 대해서는 미지"** 가 정확한 상태다.
+**이 항목은 닫혔다.** 지원 대상은 Android 16 뿐이고([ADR 0007](adr/0007-android-16-only.md)), 그 위에서는 벤더 무관하게 `EACCES` 다. 구버전 릴리스는 여전히 미지이지만 **범위 밖이므로 미해결이 아니다.** 하드링크 폴백은 **무조건 켜짐**이며, 이에 맞춰 [ADR 0004](adr/0004-link2symlink.md) 의 조건부 Status 도 무조건으로 개정했다.
 
-**무엇이 이것을 끝내는가**: Android 12~15 기기에서 `alr doctor` P6. 성공하면 그 릴리스에서 link2symlink 를 끈다 — 불필요한 복잡도이자 버그 표면이다.
-
-**오늘 무엇이 막는가**: 구버전 Android 기기가 없다. **코드가 아니라 기기가 막고 있다.**
+> ⚠️ 여기 적혀 있던 런타임 스위치(`state/<name>/doctor.json` 의 `link2symlink`)는 **구현된 적이 없다** — 코드에서 그 파일을 읽거나 쓰는 곳이 0건이다. 없는 안전장치를 문서가 있다고 적고 있었고, 이제 필요도 없으므로 **구현하지 않고 내린다.**
 
 ### R11. phantom process 32개 한도 — `SOURCE`, 완화만 가능
 
@@ -353,7 +351,7 @@ Ubuntu 20.04 / Debian 11(glibc 2.31)에는 `--argv0`이 없어 argv[0]이 호스
 
 ## 5. 검증 우선순위
 
-> **이 목록은 1번 기기에서 이미 전부 돌았다** — MediaTek MT8775 / Android 16 / 커널 `6.1.145-android14` / `untrusted_app_27` / `Seccomp=2`. 결과는 [device-bringup](evidence/2026-08-02-device-bringup.md)에 있다(P1~P10 `READY, FATAL 0`, syscall 468개 중 239개 차단). 따라서 아래는 **2번 기기 프로토콜**이다. 남은 `PENDING_DEVICE` 중 R10(P6)은 정확히 이것만 기다리고 있다.
+> **이 목록은 1번 기기에서 이미 전부 돌았다** — MediaTek MT8775 / Android 16 / 커널 `6.1.145-android14` / `untrusted_app_27` / `Seccomp=2`. 결과는 [device-bringup](evidence/2026-08-02-device-bringup.md)에 있다(P1~P10 `READY, FATAL 0`, syscall 468개 중 239개 차단). **2번 기기(Snapdragon 8 Elite)에서도 전부 돌았다** — [M19](evidence/2026-08-03-m19-snapdragon.md), 결과 동일. 따라서 아래는 **앞으로 얻을 기기에 대한 프로토콜**이다. R10 은 더 이상 이것을 기다리지 않는다([ADR 0007](adr/0007-android-16-only.md) 로 종결).
 >
 > 두 항목은 이 목록이 세워질 때와 의미가 달라졌다: **P9 `/dev/full`은 이제 영구 비목표**라(§4) 결과를 기록만 하고 대응하지 않는다. **P2는 SysV IPC까지 답했다**(R9).
 
@@ -373,4 +371,4 @@ Ubuntu 20.04 / Debian 11(glibc 2.31)에는 `--argv0`이 없어 argv[0]이 호스
 11. P11 rootfs raw svc 스캔                       (Go 바이너리 목록)
 ```
 
-**Android 12대 디바이스 1종 + Android 15/16대 디바이스 1종**에서 각각 돌린다. bionic allowlist가 릴리스마다 늘었다 (365 → 392줄).
+**Android 16 기기를 새로 얻을 때마다** 돌린다 — 변하는 축은 벤더·커널이다([ADR 0007](adr/0007-android-16-only.md)). 2026-08-03 기준 2대 완료(MediaTek 커널 6.1 / Snapdragon 8 Elite 커널 6.6)이고 차단 집합 239개가 동일했다. 다른 릴리스는 범위 밖이라 이 프로토콜의 대상이 아니다.

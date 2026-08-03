@@ -108,7 +108,7 @@ allowlist 부재로 차단되는 것(확인됨): `set_robust_list`(99), `get_rob
 > ⚠️ **`openat2`(437)와 `faccessat2`(439)는 추정이 틀렸다** — `MEASURED` 2026-08-02.
 > bionic allowlist 부재를 근거로 차단으로 적었으나, SM-X236N(Android 16)에서 **둘 다 허용**된다. Android 16에서 allowlist가 넓어진 것으로 보인다.
 > **결과**: `openat2(RESOLVE_IN_ROOT)` fast path가 다시 후보가 된다 — 커널이 심링크 탈출을 막아 주므로 [ADR 0003](adr/0003-ld-preload-path-virtualization.md)의 문자열 재작성보다 안전하고 빠르다. 그 ADR이 이것을 기각한 사유(SIGSYS)가 이 기기에서는 성립하지 않는다.
-> **단, Android 12~15에서 재확인하기 전에는 채택하지 말 것.** 구버전에서 차단이면 매 호출이 ptrace 왕복이 되어 fast path가 아니라 최악의 경로가 된다. 런타임 프로브 후 분기하는 설계가 필요하다.
+> **채택하지 않기로 최종 결정했다** — [ADR 0007 §3](adr/0007-android-16-only.md). 구버전 재확인 조건은 [ADR 0007](adr/0007-android-16-only.md) 로 사라졌지만, 결론은 그대로 기각이고 근거가 바뀌었다: `openat2` 는 **open 계열만** 덮는데 경로 가상화는 심볼 163개에 걸쳐 있어 재작성기를 대체할 수 없고(경로가 둘로 늘 뿐이다), 재작성 총비용은 이미 예산의 1/20 이라 성능 동기가 없으며, `RESOLVE_IN_ROOT` 의 이점인 심링크 탈출 차단은 [§5 비목표](00-product.md)다.
 
 > ⚠️ **cred-drop 계열 중 `setresuid`(147), `getresuid`(148), `getresgid`(150)는 차단되지 않는다** — `MEASURED`.
 > 차단되는 것은 143/144/145/146/149/151/152/159뿐이다.
@@ -142,9 +142,11 @@ allowlist 부재로 차단되는 것(확인됨): `set_robust_list`(99), `get_rob
 >
 > **결과**: `alr_sigsys_table.h`를 릴리스에 동봉하는 현재 방식이 옳다. 표는 기기별 생성물이 아니라 **기본값**으로 취급할 수 있고, `alr doctor`는 여전히 재생성 수단으로 남는다.
 >
-> **남은 변수는 Android 릴리스 하나다.** 두 기기 모두 Android 16이다. 갈린 것(SoC 벤더, 커널 6.1→6.6, android14→android15 공통 브랜치)은 전부 무관했고, **정작 allowlist가 실제로 따라가는 축**(android12 365줄 → android16 392줄)은 고정된 채로 남았다. 즉 이 결과는 "OEM은 상관없다"는 강한 증거이고 "Android 버전도 상관없다"는 증거는 **아니다**.
-> **무엇이 이것을 끝내는가**: Android 12~15 중 한 대에서 같은 스윕 후 `scripts/diff-sweep.sh`. 같은 스윕이 위 `openat2`/`faccessat2` 질문도 함께 답한다 — blocker가 같으므로 따로 재지 않는다.
-> **무엇이 막고 있는가**: 구버전 Android 기기가 없다. 기술적 장애물은 없다. `PTRACE_SECCOMP_GET_FILTER`로 필터를 읽는 지름길은 여전히 불가(`CAP_SYS_ADMIN` 필요)하므로 스윕이 유일한 길이다.
+> 🚫 **남은 변수였던 Android 릴리스는 재지 않기로 했다** ([ADR 0007](adr/0007-android-16-only.md)). 아래 문단의 실측·논증은 그대로 유효하며, 그것이 바로 범위를 16으로 좁힌 근거다.
+>
+> **원래 문장:** **남은 변수는 Android 릴리스 하나다.** 두 기기 모두 Android 16이다. 갈린 것(SoC 벤더, 커널 6.1→6.6, android14→android15 공통 브랜치)은 전부 무관했고, **정작 allowlist가 실제로 따라가는 축**(android12 365줄 → android16 392줄)은 고정된 채로 남았다. 즉 이 결과는 "OEM은 상관없다"는 강한 증거이고 "Android 버전도 상관없다"는 증거는 **아니다**.
+> **무엇이 이것을 끝내는가**: 아무것도 필요 없다 — **결정으로 닫혔다.** 이 항목이 걸고 있던 두 질문(차단 집합 일반화, `openat2`/`faccessat2` 채택)은 각각 [ADR 0007](adr/0007-android-16-only.md) 의 Decision 과 §3 에서 답이 났다.
+> **막고 있던 것**: 구버전 Android 기기였다. 기술적 장애물은 없었고 지금도 없다 — 그래서 이것은 blocker 가 아니라 **선택**이었다. 새 기기(같은 Android 16, 다른 벤더)를 얻으면 여전히 스윕을 돌려 `scripts/diff-sweep.sh` 로 비교한다. `PTRACE_SECCOMP_GET_FILTER` 지름길은 `CAP_SYS_ADMIN` 이 필요해 여전히 불가이므로 스윕이 유일한 길이다.
 >
 > 스윕 원본은 이제 [`docs/evidence/sweeps/`](evidence/sweeps/)에 그대로 들어간다. 이전에는 `alr_sigsys_table.h` 끝의 `#if 0` 블록에만 있었고, 이번 diff는 표 행만 grep한 탓에 **"원본이 없어서 비교 불가"라고 결론 내릴 뻔했다.**
 

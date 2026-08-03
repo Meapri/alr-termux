@@ -73,7 +73,9 @@ mirror = ""              # 비우면 tarball 기본값 사용 (권장)
 
 ## 3. `alr doctor`
 
-**설치 후 1회 필수.** 결과를 `state/<distro>/doctor.json`에 캐시하고 런타임이 읽는다.
+**진단 도구다.** 기기가 이상하게 굴 때, 그리고 **지원 대상(Android 16) 밖에서 돌릴 때** 실행한다 — 리포트와 붙여 넣을 수 있는 에뮬레이션 표를 출력한다.
+
+> ⚠️ 원래 이 자리에는 "결과를 `state/<distro>/doctor.json`에 캐시하고 런타임이 읽는다" 가 있었다. **구현된 적이 없고**(그 파일을 읽거나 쓰는 코드가 0건), [ADR 0007](adr/0007-android-16-only.md) 로 릴리스별 분기가 사라지면서 필요도 없어졌다.
 
 [01-platform-facts.md §G](01-platform-facts.md)의 P1~P12를 전부 실행한다.
 
@@ -145,7 +147,7 @@ alr doctor — device capability report
 - SIGSYS가 오면 차단, `ENOSYS`면 미구현, 그 외면 허용으로 분류
 - 각 syscall마다 자식을 새로 fork하는 것이 안전하다 (하나가 프로세스를 망가뜨려도 격리)
 
-**Android 12 디바이스와 Android 15/16 디바이스 양쪽에서 돌려야 한다** — allowlist가 릴리스마다 늘었다 (365 → 392줄).
+**지원 대상인 Android 16 기기에서 돌린다** — 새 벤더·새 커널을 만날 때마다다([ADR 0007](adr/0007-android-16-only.md)). allowlist 는 릴리스마다 늘었지만(365 → 392줄) 다른 릴리스는 범위 밖이므로 이 스윕의 대상이 아니다.
 
 ## 4. `alr bench`
 

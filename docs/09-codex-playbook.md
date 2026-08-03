@@ -198,7 +198,7 @@ ssh -p 8022 localhost
 >
 > 끝내는 데 필요한 측정은 **둘이었고 둘 다 했다.** 성능 쪽은 두 기기의 배수를 나란히 실었고([M19 §6.3](evidence/2026-08-03-m19-snapdragon.md)), 호환성 쪽은 `alr doctor` 스윕을 다시 돌려 diff 했다 — **diff 는 0이다.** 239개 집합이 완전히 같으므로 `src/supervisor/alr_sigsys_table.h` 는 상수(기본값)로 취급할 수 있다([§A6](01-platform-facts.md)).
 >
-> **남은 기기는 하나다** — [§A6](01-platform-facts.md) 가 요구한 둘 중 "다른 OEM/SoC 한 대"는 확보했고, **Android 12~15 한 대**만 남았다. 그리고 그쪽이 더 중요한 축이다: 갈린 것(벤더·커널)은 전부 무관했는데 정작 allowlist 가 따라가는 축은 고정돼 있었다.
+> **기기 축은 닫혔다 — 측정이 아니라 결정으로.** [§A6](01-platform-facts.md) 가 요구한 둘 중 "다른 OEM/SoC 한 대"는 확보해 답을 냈고(239개 집합 동일), **Android 12~15 는 재지 않기로 했다**([ADR 0007](adr/0007-android-16-only.md)). **구버전 기기를 구하러 가지 말 것.** 새 기기를 얻는다면 Android 16 이어야 하고, 그때 할 일은 스윕 후 `scripts/diff-sweep.sh` 다.
 
 ## 7. 하지 말아야 할 유혹들
 

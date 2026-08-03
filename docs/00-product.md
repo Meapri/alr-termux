@@ -6,19 +6,20 @@
 
 ## 2. 타깃
 
-- **디바이스**: arm64. **Android 16 에서 벤더 2곳 검증됨. 다른 Android 릴리스는 전부 미검증이다.**
+- **디바이스**: arm64, **Android 16 전용.** 벤더 2곳에서 검증됐고, 다른 릴리스는 **지원 범위 밖**이다([ADR 0007](adr/0007-android-16-only.md)).
 
 | | 상태 |
 |---|---|
 | MediaTek MT8775, Android 16 (커널 `6.1.145-android14`) | **검증됨** — 수용 78, 폭 96/96 |
 | Qualcomm Snapdragon 8 Elite SM8750, Android 16 (커널 `6.6.98-android15`) | **검증됨** — 수용 78, 폭 96/96 ([M19](evidence/2026-08-03-m19-snapdragon.md)) |
-| Android 12 / 13 / 14 / 15 (벤더 무관) | **미검증.** 기기 없음 |
+| Android 12 / 13 / 14 / 15 (벤더 무관) | **범위 밖 — 지원하지 않는다.** 검증 계획 없음 ([ADR 0007](adr/0007-android-16-only.md)) |
 
 > ✅ **벤더·커널 축은 닫혔다.** 두 기기는 SoC 벤더가 다르고 커널도 6.1-android14 대 6.6-android15 로 갈리는데, **zygote 차단 syscall 239개 집합이 완전히 동일하다**([§A6](01-platform-facts.md)). 수용 78종, 호환성 폭 96/96, 슈퍼바이저 12/12, `path_traps=0 syscall_stops=0` 도 모두 같다.
 >
-> ⚠️ **남은 축은 Android 릴리스 하나이고, 그것이 하필 제일 중요한 축이다.** 이 설계의 근간인 zygote seccomp allowlist 는 **릴리스마다 커졌다**(android12 365줄 → android16 392줄). 두 기기가 갈린 축(벤더·커널)은 전부 무관했는데 **정작 allowlist 가 실제로 따라가는 축은 고정된 채였다.** 즉 이 결과는 "OEM 은 상관없다" 의 강한 증거이고, "Android 12 에서도 될 것" 의 증거는 **아니다.**
+> 🚫 **Android 릴리스 축은 재지 않기로 했다 — 미해결이 아니라 범위 결정이다**([ADR 0007](adr/0007-android-16-only.md)).
+> 이 설계의 근간인 zygote seccomp allowlist 는 **릴리스마다 커졌다**(android12 365줄 → android16 392줄). 두 기기가 갈린 축(벤더·커널)은 전부 무관했는데 **정작 allowlist 가 실제로 따라가는 축은 고정된 채였다.** 즉 실측 결과는 "OEM 은 상관없다" 의 강한 증거이지 **"Android 12 에서도 될 것" 의 증거가 아니다.** 그리고 그 증거를 만들 계획이 없으므로, 지원한다고 적지 않는다.
 >
-> **현재 정직한 지원 선언은 "Android 16 에서 검증, 벤더 무관" 이다.** 다른 Android 릴리스의 기기에서 처음 할 일은 `alr doctor` 로 차단 목록을 뽑아 `scripts/diff-sweep.sh` 로 [`docs/evidence/sweeps/`](evidence/sweeps/) 와 비교하는 것이다.
+> **지원 선언은 "Android 16, 벤더 무관" 이다.** 범위 밖 기기에서 `alr` 은 거절하지 않지만 `alr doctor` 가 **명시적으로 미지원이라고 말한다** — 그 기기의 스윕 결과를 함께 보여 주므로, 감수하고 쓸지는 사용자가 판단한다. 우리가 검증하지 않았다는 사실이 가려지지는 않는다.
 >
 > **성능 배수는 기기별이다.** 같은 워크로드가 두 기기에서 `node` 콜드 6.60× 와 5.23× 로 갈린다. 배수를 인용할 때는 기기를 함께 쓴다([M19 §6.3](evidence/2026-08-03-m19-snapdragon.md)).
 - **호스트**: Termux **F-Droid / GitHub 빌드** (`targetSdkVersion=28`). Play Store 빌드는 **v1 미지원** (ADR 0005).

@@ -341,7 +341,9 @@ glibc 2.34+ 는 `files` 백엔드를 libc 에 내장했고, 리터럴 `/etc/pass
 
 ### 8.3 활성화
 
-`alr doctor` P6이 `link(2)`를 실제로 테스트한다. **성공하면 이 계층 전체를 끈다** — 불필요한 복잡도이자 버그 표면이다. `state/<name>/doctor.json`의 `link2symlink: true|false`로 제어한다.
+`alr doctor` P6이 `link(2)`를 실제로 테스트한다. **참조 기기 2대 모두 `EACCES` 였고**, 지원 대상(Android 16, [ADR 0007](adr/0007-android-16-only.md))에서 이 조건이 뒤집힐 기기는 없다. 따라서 이 계층은 **무조건 켜짐**이다.
+
+> ⚠️ 여기 적혀 있던 런타임 스위치(`state/<name>/doctor.json` 의 `link2symlink: true|false`)는 **구현된 적이 없다.** 코드에서 그 파일을 읽거나 쓰는 곳이 0건이고, `alr doctor` 는 리포트를 찍을 뿐이다. 이제 필요도 없으므로 구현하지 않고 내린다 — 없는 안전장치를 있다고 적어 두는 것이 실제 위험이다.
 
 ### 8.4 테스트 매트릭스 (필수)
 

@@ -36,6 +36,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/system_properties.h>
 
 /* bionic exposes these via <asm/ioctls.h> pulled in by <sys/ioctl.h>, but the
  * definitions moved around across NDK versions — define them if absent. */
@@ -106,6 +107,46 @@ static void read_first_line(const char *path, char *out, size_t n)
     r = read(fd, out, n - 1);
     close(fd);
     if (r > 0) { out[r] = 0; out[strcspn(out, "\n")] = 0; }
+}
+
+/* The Android release this build supports.  ADR 0007: 16 only -- 12~15 are out
+ * of scope, not merely unmeasured.  The zygote seccomp allowlist grows with
+ * every release (android12 365 lines -> android16 392), and that is the axis
+ * the whole design rests on. */
+#define ALR_SUPPORTED_RELEASE "16"
+
+static int probe_release(void)
+{
+    char rel[PROP_VALUE_MAX] = "", sdk[PROP_VALUE_MAX] = "";
+    int supported;
+
+    __system_property_get("ro.build.version.release", rel);
+    __system_property_get("ro.build.version.sdk", sdk);
+
+    supported = (strcmp(rel, ALR_SUPPORTED_RELEASE) == 0);
+    printf("  [P0 ] Android %s (SDK %s)  -> %s\n",
+           rel[0] ? rel : "?", sdk[0] ? sdk : "?",
+           supported ? "PASS (supported)" : "WARN (UNSUPPORTED)");
+
+    if (!supported) {
+        /* Say it, do not block it.  We measured "we did not test this", not
+         * "this does not work" -- refusing here would claim more than we know.
+         * But a silent READY on an untested release hides that distinction,
+         * and the sweep below is exactly the evidence the user needs to decide.
+         * ADR 0007 has the reasoning. */
+        printf("        !! alr supports Android " ALR_SUPPORTED_RELEASE
+               " only (docs/adr/0007-android-16-only.md).\n"
+               "           This release was never tested and will not be.\n"
+               "           alr does NOT refuse to run -- the P2 sweep below is\n"
+               "           measured on THIS device, so compare it against\n"
+               "           docs/evidence/sweeps/ with scripts/diff-sweep.sh.\n"
+               "           A non-empty diff means the shipped emulation table\n"
+               "           does not describe this phone.\n");
+        counts[G_WARN]++;
+    } else {
+        counts[G_PASS]++;
+    }
+    return supported;
 }
 
 static int probe_validity(void)
@@ -550,6 +591,9 @@ int main(int argc, char **argv)
     printf("  kernel   %s %s\n", u.release, u.machine);
     printf("  probe dir %s\n\n", dir);
 
+    /* Release first: it is a SUPPORT statement, and it must be visible even
+     * when the context turns out to be unmeasurable and we abort below. */
+    (void)probe_release();
     measurable = probe_validity();
     if (!measurable) {
         printf("\n  ABORTING: this context has no app seccomp filter, so every\n"

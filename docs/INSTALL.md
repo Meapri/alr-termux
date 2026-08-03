@@ -3,17 +3,18 @@
 `alr`을 폰이나 태블릿에 올려서 Ubuntu 24.04 arm64 게스트를 띄우기까지의 절차다.
 개발자용 온디바이스 루프는 [scripts/dev-bootstrap.md](../scripts/dev-bootstrap.md)에 따로 있다.
 
-> **선행 릴리스다.** 참조 디바이스는 **2대 — MediaTek(커널 6.1)과 Snapdragon 8 Elite(커널 6.6), 둘 다 Android 16.**
-> 두 기기의 zygote 차단 syscall 239개 집합이 완전히 동일하므로 **SoC·커널 축은 검증됐다**
+> **`alr` 은 Android 16 전용이다.** 다른 릴리스는 **지원 범위 밖**이며, 검증하지 않고 동작을 주장하지 않는다
+> ([ADR 0007](adr/0007-android-16-only.md)).
+> 참조 디바이스는 **2대 — MediaTek(커널 6.1)과 Snapdragon 8 Elite(커널 6.6), 둘 다 Android 16.**
+> 두 기기의 zygote 차단 syscall 239개 집합이 완전히 동일해 **벤더·커널 축은 실측으로 닫혔다**
 > ([M19](evidence/2026-08-03-m19-snapdragon.md)).
-> **다른 Android 버전(12~15)은 여전히 미검증이다** — bionic allowlist 가 릴리스마다 커지므로 이것이 남은 위험이다.
 
 ## 1. 기기 요구사항
 
 | 항목 | 요구 | 확인 방법 |
 |---|---|---|
 | CPU | **arm64 (aarch64)** 전용 | `uname -m` 이 `aarch64` |
-| Android | **12 ~ 16** (설계 타깃). **검증된 것은 16뿐** (벤더 2곳, 커널 6.1·6.6) — 12~15는 UNVERIFIED | 설정 → 휴대전화 정보 |
+| Android | **16 전용.** 12~15 는 **지원하지 않는다** — 미검증이 아니라 범위 밖이다 ([ADR 0007](adr/0007-android-16-only.md)) | 설정 → 휴대전화 정보 |
 | Termux | **F-Droid 또는 GitHub 릴리스 빌드** (`targetSdkVersion=28`) | §2 |
 | 루팅 | 불필요. **루팅했다면 오히려 검증 대상이 아니다** | §5 |
 | 저장 공간 | ubuntu-base tarball 약 30 MB + 추출 후 rootfs. `git`까지 넣으면 수백 MB | |

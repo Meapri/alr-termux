@@ -214,7 +214,7 @@ resume은 `alr` 자신의 `SIGCONT` 포워딩만으로 부족하다:
 ### 5.1 테이블 확장 규칙
 
 `alr doctor` P2(syscall 0..460 스윕)가 테이블에 없는 차단 syscall을 발견하면:
-- `state/<name>/doctor.json`에 기록
+- (원래 `state/<name>/doctor.json` 에 기록한다고 적혀 있었으나 구현되지 않았다 — [ADR 0007 §2](adr/0007-android-16-only.md))
 - 기본 `-ENOSYS` 정책으로 자동 처리
 - **경고 로그** 출력 — 조용히 넘기면 새 Android 버전의 회귀를 놓친다
 

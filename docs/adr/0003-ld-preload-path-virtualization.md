@@ -72,7 +72,15 @@ Accepted (설계 단계, 2026-08-02).
 
 상위 프로젝트가 fast path에서 쓴다. 커널이 심링크 탈출을 막아 주므로 더 안전하고 빠르다.
 
-**기각**: `openat2`(437)가 bionic allowlist에 없어 **SIGSYS**다 ([§A6](../01-platform-facts.md)). 슈퍼바이저가 `-ENOSYS`로 구제하지만, 그건 매 호출마다 ptrace 왕복을 뜻하므로 fast path로 쓸 수 없다.
+**기각** — 단 **사유가 2026-08-03 에 교체되었다.**
+
+> ⚠️ **원래 사유는 실측으로 반증됐다.** 여기 적혀 있던 것은 "`openat2`(437)가 bionic allowlist에 없어 **SIGSYS** 이므로 매 호출이 ptrace 왕복" 이었다. **틀렸다** — 참조 기기 2대 모두에서 `openat2` 와 `faccessat2` 는 **허용**이고, 437 은 양쪽 239개 차단 집합 어디에도 없다([§A6](../01-platform-facts.md), [브링업 §P4](../evidence/2026-08-02-device-bringup.md)).
+
+**기각 사유(현행, [ADR 0007 §3](0007-android-16-only.md))**:
+
+- **덮는 면적이 좁다.** `openat2` 는 `open` 계열만 대체하는데 경로 가상화는 `stat`·`lstat`·`readlink`·`rename`·`opendir`·`exec` 등 **심볼 163개**에 걸쳐 있다. 채택해도 문자열 재작성은 그대로 남으므로 **경로가 하나로 줄지 않고 둘로 는다.**
+- **성능 이득이 측정되지 않는다.** 재작성 총비용은 `git status` 10k 실측 **73.6 µs**, 예산 1.5 ms 의 1/20 이다([M19 §7](../evidence/2026-08-03-m19-snapdragon.md)).
+- **안전성 이득은 비목표다.** `RESOLVE_IN_ROOT` 가 주는 것은 심링크 탈출 차단인데 [00-product.md §5](../00-product.md) 가 `alr` 은 보안 경계가 **아니다**라고 못박는다.
 
 ### (B) fakechroot 재사용
 

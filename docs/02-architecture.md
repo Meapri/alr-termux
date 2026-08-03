@@ -304,7 +304,7 @@ $PREFIX/var/lib/alr/
         usr/lib/alr/manifest.json                     {zig_version,target,sha256…}
     cache/downloads/                                  tarball 캐시
     state/<name>/fakeroot.db                          fakeroot 메타DB
-    state/<name>/doctor.json                          alr doctor 결과 캐시
+    (state/<name>/doctor.json 은 계획만 있었고 구현되지 않았다 — ADR 0007 §2)
 $HOME/.alr/                                           사용자별 오버라이드
 ```
 

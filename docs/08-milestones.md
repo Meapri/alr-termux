@@ -394,7 +394,7 @@ PRELOAD RW REL COST: <= 20 ns/op
 - `bench/` 이식 완료
 - `alr bench --vs proot` 동작
 - `bench/regression_gate.py`
-- 참조 디바이스에서 측정한 리포트 (Android 12대 1종 + 15/16대 1종)
+- 참조 디바이스 2종에서 측정한 리포트 (벤더·커널 상이, 둘 다 Android 16 — [ADR 0007](adr/0007-android-16-only.md))
 
 > **현재 상태 (2026-08-03, 갱신) — 4줄 중 3줄 충족, 남은 하나는 기기다.**
 > - ✅ **하네스**: `tests/device/bench.sh`(A/B), `tests/device/rw_bench.sh`(재작성 총비용).
@@ -403,8 +403,8 @@ PRELOAD RW REL COST: <= 20 ns/op
 > - ✅ **`bench/regression_gate.py`**: 있다. 하드 불변식 + 기기별 회귀 검사 + `--self-test`.
 > - ✅ **2기종 리포트**: [M19](evidence/2026-08-03-m19-snapdragon.md) — MediaTek(커널 6.1)과
 >   Snapdragon 8 Elite(커널 6.6). 차단 집합 239개 동일, 수용 78, 폭 96/96 일치.
-> - ❌ **"Android 12대 1종"**: 두 기기 모두 **Android 16** 이라 여전히 미측정이다. 그리고 그것이
->   allowlist 가 실제로 따라가는 유일한 축이다([§A6](01-platform-facts.md)).
+> - ✅ **참조 디바이스 2종**: MediaTek(커널 6.1)·Snapdragon 8 Elite(커널 6.6), 둘 다 Android 16.
+>   구버전 Android 는 산출물에서 내렸다 — 미측정이 아니라 **범위 밖**이다([ADR 0007](adr/0007-android-16-only.md)).
 >
 > 배수도 갱신됐다: `git status` 10k 는 **25.8×**(양쪽 git 2.53.0 동일)가 인용할 값이고, 34.8× 는
 > 세 실행의 git 빌드가 서로 달랐던 M8 수치다([M19 §6.1](evidence/2026-08-03-m19-snapdragon.md)).

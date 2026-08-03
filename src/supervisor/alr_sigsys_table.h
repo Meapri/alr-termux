@@ -23,13 +23,19 @@
  * would have swept those up with their neighbours 143-152, so their survival
  * on both devices is a fingerprint match rather than a coincidence of totals.
  *
- * That is TWO devices, not a proof of universality, and BOTH ARE ANDROID 16.
- * Kernel and SoC vendor differ (6.1-android14/MediaTek vs 6.6-android15/
- * Qualcomm) and made no difference; the Android RELEASE is the variable that
- * has not been varied, and it is the one the allowlist actually tracks
- * (android12 365 lines -> android16 392).  What this buys is that the table
- * may ship as a DEFAULT rather than being regenerated per phone.  `alr doctor`
- * still regenerates it, and docs/01-platform-facts.md §A6 keeps the caveat.
+ * SCOPE: this table is a CONSTANT for Android 16, which is the only release
+ * alr supports (docs/adr/0007-android-16-only.md).  Two devices differing in
+ * SoC vendor and kernel (6.1-android14/MediaTek vs 6.6-android15/Qualcomm)
+ * produce identical sets, so it ships as a default rather than being
+ * regenerated per phone.
+ *
+ * On ANY OTHER Android release this table is an unvalidated guess.  The
+ * allowlist grows with each release (android12 365 lines -> android16 392),
+ * and that axis was deliberately not measured -- it is out of scope, not
+ * pending.  `alr doctor` prints the Android release and says UNSUPPORTED
+ * when it is not 16; its P2 sweep is the only thing that would reveal a
+ * mismatch, and scripts/diff-sweep.sh compares it against
+ * docs/evidence/sweeps/.
  *
  * Raw sweeps are checked in verbatim under docs/evidence/sweeps/ so the next
  * comparison is a one-liner.  Before that they lived only in the `#if 0` block
