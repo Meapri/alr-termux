@@ -150,6 +150,31 @@ else
     emit "CLI VERSION DETECTS STALE PRELOAD" SKIP "no second .so to swap in"
 fi
 ckrc "CLI UPDATE COMPONENTS"     0  $ALR update-components
+ckc  "CLI LIST"                  "$(basename "$R")"  $ALR list
+# A distro name becomes a path component AND is interpolated into a shell
+# command, and `remove` deletes what it resolves to.  Nothing validated it.
+ckrc "CLI REJECTS DOTDOT DISTRO" 125  $ALR -d ../escape run /bin/true
+ckrc "CLI REJECTS ABS DISTRO"    125  $ALR -d /abs run /bin/true
+# remove: the confirmation must actually protect, --force must actually skip
+# it, and neither may touch a directory that is not one of ours.
+_dsp="$ALR_ROOT_DIR/alrdisposable"
+mkdir -p "$_dsp/usr/lib/alr"
+echo wrong-name | $ALR remove alrdisposable >/dev/null 2>&1
+[ -d "$_dsp" ] && emit "CLI REMOVE NEEDS CONFIRMATION" PASS \
+               || emit "CLI REMOVE NEEDS CONFIRMATION" FAIL "deleted without a matching name"
+echo alrdisposable | $ALR remove alrdisposable >/dev/null 2>&1
+[ -d "$_dsp" ] && emit "CLI REMOVE ON CONFIRMATION" FAIL "survived a matching name" \
+               || emit "CLI REMOVE ON CONFIRMATION" PASS
+mkdir -p "$_dsp/usr/lib/alr"; $ALR remove alrdisposable --force >/dev/null 2>&1
+[ -d "$_dsp" ] && emit "CLI REMOVE FORCE" FAIL "survived --force" \
+               || emit "CLI REMOVE FORCE" PASS
+# The refusal that matters: a directory with neither a guest ld.so nor
+# usr/lib/alr is not ours, and --force must not override that.
+_na="$ALR_ROOT_DIR/alrnotours"; mkdir -p "$_na/somefile.d"
+$ALR remove alrnotours --force >/dev/null 2>&1
+[ -d "$_na" ] && emit "CLI REMOVE REFUSES FOREIGN DIR" PASS \
+              || emit "CLI REMOVE REFUSES FOREIGN DIR" FAIL "deleted a non-rootfs directory"
+rm -rf "$_na" "$_dsp"
 # Booting without the guest preload is not a degraded mode, it is a different
 # product: every path resolves against Android.  It used to be silent --
 # prepare() simply omits --preload -- and `alr install` even reported success

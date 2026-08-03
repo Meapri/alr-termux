@@ -41,6 +41,7 @@ void alr_resolvd_stop(void);
 static int g_log;
 static const char *g_resolv_sock;
 static const char *g_with;
+static int g_force;
 /* Our own path, captured at startup.  A subshell's /proc/self/exe is the
  * SHELL's, not ours -- reading it lazily from inside sh -c silently invoked
  * /bin/sh with our arguments and reported "Illegal option -d". */
@@ -62,10 +63,37 @@ static const char *prefix(void)
     return (p && *p) ? p : "/data/data/com.termux/files/usr";
 }
 
+/* A distro name becomes a PATH COMPONENT and is interpolated into a shell
+ * command (guest_run builds `... -d '%s' run ...`).  Nothing validated it.
+ * `alr remove` makes that dangerous rather than merely untidy: the name is
+ * joined onto $ALR_ROOT_DIR and the result is deleted recursively, so ".." or
+ * an absolute path would delete something else entirely.
+ *
+ * Deliberately strict -- [A-Za-z0-9._-], no leading dot, no empty.  Every
+ * distro this project ships or plans (ubuntu-24.04, ubuntu-26.04, debian-*)
+ * fits, and a name that does not is far more likely to be a mistake than a
+ * requirement. */
+static int distro_name_ok(const char *d)
+{
+    size_t i;
+    if (!d || !*d || d[0] == '.') return 0;
+    for (i = 0; d[i]; i++) {
+        char c = d[i];
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+              || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-'))
+            return 0;
+    }
+    return i <= 64;
+}
+
 static void distro_root(char *out, size_t n, const char *distro)
 {
     const char *root = getenv("ALR_ROOT_DIR");
     if (!distro || !*distro) distro = "ubuntu-24.04";
+    if (!distro_name_ok(distro))
+        die("bad-distro-name",
+            "distro names may contain only [A-Za-z0-9._-] and may not start "
+            "with '.'");
     if (root && *root) snprintf(out, n, "%s/%s", root, distro);
     else snprintf(out, n, "%s/var/lib/alr/distros/%s", prefix(), distro);
 }
@@ -864,6 +892,92 @@ static int verify_rootfs(const char *R)
     return missing;
 }
 
+/* `alr list` -- docs/06-cli-spec.md §1, docs/05-provisioning-spec.md §6. */
+static int cmd_list(void)
+{
+    const char *root = getenv("ALR_ROOT_DIR");
+    char dir[ALR_PBUF], p[ALR_PBUF];
+    DIR *d;
+    struct dirent *e;
+    int n = 0;
+
+    if (root && *root) snprintf(dir, sizeof dir, "%s", root);
+    else snprintf(dir, sizeof dir, "%s/var/lib/alr/distros", prefix());
+
+    if (!(d = opendir(dir))) {
+        printf("no rootfs installed (%s does not exist)\n", dir);
+        return 0;
+    }
+    printf("%-20s %-10s %s\n", "DISTRO", "PRELOAD", "PATH");
+    while ((e = readdir(d))) {
+        char so[ALR_PBUF];
+        if (e->d_name[0] == '.') continue;
+        snprintf(p, sizeof p, "%s/%s", dir, e->d_name);
+        if (!is_dir(p)) continue;
+        /* A directory here without a loader is a failed or partial install,
+         * and saying so is more useful than listing it as if it worked. */
+        snprintf(so, sizeof so, "%s/lib/ld-linux-aarch64.so.1", p);
+        if (access(so, F_OK) != 0) {
+            printf("%-20s %-10s %s\n", e->d_name, "-", "(no ld.so: incomplete)");
+            n++; continue;
+        }
+        snprintf(so, sizeof so, "%s/usr/lib/alr/libalr_preload.so", p);
+        printf("%-20s %-10s %s\n", e->d_name,
+               access(so, R_OK) == 0 ? "yes" : "MISSING", p);
+        n++;
+    }
+    closedir(d);
+    if (!n) printf("(none)\n");
+    return 0;
+}
+
+/* `alr remove <distro> [--force]`.
+ *
+ * The only subcommand that destroys user data, and the path it destroys is an
+ * environment variable joined to a name -- see distro_name_ok().  Everything
+ * here is about not deleting the wrong thing. */
+static int cmd_remove(const char *distro, int force)
+{
+    char R[ALR_PBUF], so[ALR_PBUF];
+    char ans[16];
+
+    if (!distro || !*distro) die("bad-distro-name", "remove needs a distro name");
+    distro_root(R, sizeof R, distro);          /* validates the name */
+
+    if (!is_dir(R)) die("rootfs-missing", "no such rootfs");
+
+    /* Refuse anything that is not recognisably one of ours.  A user who points
+     * ALR_ROOT_DIR at their home directory should get a refusal, not an empty
+     * home directory. */
+    snprintf(so, sizeof so, "%s/lib/ld-linux-aarch64.so.1", R);
+    if (access(so, F_OK) != 0) {
+        snprintf(so, sizeof so, "%s/usr/lib/alr", R);
+        if (!is_dir(so))
+            die("not-a-rootfs",
+                "that directory has neither a guest ld.so nor usr/lib/alr; "
+                "refusing to delete it");
+    }
+
+    if (!force) {
+        fprintf(stderr, "alr: about to DELETE %s\n", R);
+        fprintf(stderr, "     type the distro name to confirm: ");
+        if (!fgets(ans, sizeof ans, stdin)) { fprintf(stderr, "\naborted\n"); return 1; }
+        ans[strcspn(ans, "\n")] = '\0';
+        if (strcmp(ans, distro) != 0) {
+            fprintf(stderr, "alr: name did not match; nothing was deleted\n");
+            return 1;
+        }
+    }
+
+    {   char *rm[4];
+        rm[0] = (char *)"rm"; rm[1] = (char *)"-rf"; rm[2] = R; rm[3] = NULL;
+        if (run_cmd(rm) != 0) die("remove-failed", "rm -rf failed");
+    }
+    if (is_dir(R)) die("remove-failed", "the rootfs is still there after rm -rf");
+    printf("alr: removed %s\n", R);
+    return 0;
+}
+
 static int cmd_install(const char *distro, const char *url_override)
 {
     char R[ALR_PBUF], part[ALR_PBUF], tarball[ALR_PBUF], cache[ALR_PBUF];
@@ -878,6 +992,14 @@ static int cmd_install(const char *distro, const char *url_override)
     snprintf(cache, sizeof cache, "%s/var/lib/alr/cache", prefix());
     snprintf(tarball, sizeof tarball, "%s/%s.tar.gz", cache, distro);
 
+    if (is_dir(R) && g_force) {
+        /* --force means "provision this again", so remove first rather than
+         * bailing out.  Goes through cmd_remove so it inherits the same
+         * refusals -- a --force that skipped them would be the one path that
+         * can delete an unrecognised directory. */
+        int rc2 = cmd_remove(distro, 1);
+        if (rc2 != 0) return rc2;
+    }
     if (is_dir(R)) {
         /* Used to return 0 and silently drop --with, so
          * `alr install -d x --with node && alr run node` failed confusingly.
@@ -1625,7 +1747,9 @@ static void usage(void)
     fprintf(stderr,
         "usage: alr [-d distro] [-v] <command>\n"
         "  install [<distro>] [--url <tarball>] [--with git,node,codex]\n"
-        "                                     provision a rootfs\n"
+        "          [--force]                  provision a rootfs\n"
+        "  list                               installed rootfs and preload state\n"
+        "  remove <distro> [--force]          DELETE a rootfs\n"
         "  run [opts] <cmd> [args...]         run one guest command\n"
         "  exec [opts] -- <cmd> [args...]     run, with -- ending option parsing\n"
         "  shell [opts]                       interactive guest shell\n"
@@ -1672,6 +1796,7 @@ int main(int argc, char **argv)
         for (j = i + 1; j < argc; j++) {
             if (!strcmp(argv[j], "--url")  && j + 1 < argc) url = argv[j + 1];
             if (!strcmp(argv[j], "--with") && j + 1 < argc) g_with = argv[j + 1];
+            if (!strcmp(argv[j], "--force")) g_force = 1;
         }
         if (!strncmp(d, "--", 2)) d = distro;
         return cmd_install(d, url);
@@ -1693,6 +1818,17 @@ int main(int argc, char **argv)
     }
     if (!strcmp(argv[i], "version") || !strcmp(argv[i], "--version"))
         return cmd_version();
+    if (!strcmp(argv[i], "list"))
+        return cmd_list();
+    if (!strcmp(argv[i], "remove")) {
+        int f = 0, j;
+        const char *d = NULL;
+        for (j = i + 1; j < argc; j++) {
+            if (!strcmp(argv[j], "--force")) f = 1;
+            else if (!d) d = argv[j];
+        }
+        return cmd_remove(d ? d : distro, f);
+    }
     if (!strcmp(argv[i], "update-components"))
         return cmd_update_components((i + 1 < argc) ? argv[i + 1] : distro);
     if (!strcmp(argv[i], "doctor")) {

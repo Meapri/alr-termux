@@ -231,12 +231,13 @@ alr update-components ubuntu-24.04   libalr_preload.so 만 갱신
 모든 실패는 안정적 `reason=` 코드를 갖는다. **이 목록은 코드가 실제로 방출하는 것과 정확히 일치해야 한다** — `scripts/check-reasons.sh` 가 양방향으로 검사하고 `make check` 에 걸려 있다.
 
 ```
-already-installed          bad-env                    bad-option
-bad-workdir                boot-enoent                boot-failed
-doctor-missing             doctor-unknown-option      download-corrupt
-download-network           env-reserved               extract-permission
-ldso-missing               no-supervisor-requested    preload-install-failed
-preload-missing-in-rootfs  preload-stale              rootfs-incomplete
+already-installed          bad-distro-name            bad-env
+bad-option                 bad-workdir                boot-enoent
+boot-failed                doctor-missing             doctor-unknown-option
+download-corrupt           download-network           env-reserved
+extract-permission         ldso-missing               no-supervisor-requested
+not-a-rootfs               preload-install-failed     preload-missing-in-rootfs
+preload-stale              remove-failed              rootfs-incomplete
 rootfs-missing             too-many-env               unhooked-static-binary
 unsupported-distro         workdir-enoent
 ```

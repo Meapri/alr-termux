@@ -5,8 +5,8 @@
 ## 1. 서브커맨드
 
 ```
-alr install <distro> [--with git,node,codex] [--force] [--offline <tarball>]
-alr remove  <distro>
+alr install <distro> [--with git,node,codex] [--force] [--url <tarball>]
+alr remove  <distro> [--force]  rootfs 삭제 (확인 프롬프트)
 alr list
 alr update-components [<distro>]
 
