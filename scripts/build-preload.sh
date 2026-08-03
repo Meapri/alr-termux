@@ -10,6 +10,19 @@ set -euo pipefail
 
 ZIG=${ZIG:-zig}
 ZIG_REQ=0.16.0
+
+# SCOPE OF THE REPRODUCIBILITY CLAIM, measured 2026-08-03 on the v0.2.0 tag:
+# byte-identical rebuilds hold PER HOST OS, not across them.  The same sources
+# (source_sha256 3a312d54...) and the same zig 0.16.0 produced
+#   b30dd81e...  on macOS/arm64
+#   16167c4e...  on the ubuntu-latest release runner
+# and each host rebuilt its own output identically from a cold cache.  So
+# "reproducible" here means "your rebuild matches your rebuild", which is what
+# scripts/check-preload.sh gates.  Someone verifying a published release by
+# rebuilding needs the SAME host OS as the release job (Linux), otherwise a
+# differing hash is expected and is not evidence of tampering.  The shipped
+# manifest's output_sha256 always describes the shipped bytes -- that is the
+# check docs/INSTALL.md asks the user to make, and it is unaffected.
 TARGET=aarch64-linux-gnu.2.17
 OUT=${OUT:-build/libalr_preload.so}
 SRC="src/preload/alr_preload.c src/common/alr_elf.c"

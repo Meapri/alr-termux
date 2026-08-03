@@ -45,12 +45,11 @@ TERMUX_PKG_MAINTAINER="@Meapri"
 TERMUX_PKG_VERSION="0.2.0"
 
 TERMUX_PKG_SRCURL=https://github.com/Meapri/alr-termux/archive/refs/tags/v${TERMUX_PKG_VERSION}.tar.gz
-# PLACEHOLDER until the v0.2.0 tag exists: the URL above interpolates the
-# version, so bumping TERMUX_PKG_VERSION silently repoints it at a v0.2.0
-# archive while a v0.1.0 hash sits here.  Nothing in the repo compares the
-# two, so a stale value would be a silent mismatch.  The placeholder guard
-# below refuses instead.  Fill in after tagging.
-TERMUX_PKG_SHA256=PLACEHOLDER_v0.2.0_source_archive_sha256
+# NOTE these two hashes are the only values in the release path with no
+# automated cross-check: their URLs interpolate TERMUX_PKG_VERSION, so a
+# version bump silently repoints them while the old hashes stay.  Bump them in
+# the same commit, or set them back to PLACEHOLDER so the guard below fires.
+TERMUX_PKG_SHA256=0b30bcdd553e7b55e7faea5fd47c629231fb5a976c0cb34e7930329c675efdd6
 
 # Runtime dependencies, derived from what src/cli/alr.c actually execs or pipes
 # through popen() ON THE HOST.  These are not guesses:
@@ -93,10 +92,9 @@ TERMUX_PKG_NO_ELF_CLEANER=true
 # host binaries so the API level and hardening flags match the rest of the
 # repository rather than whatever the release machine happened to have.
 _PRELOAD_TARBALL_URL="https://github.com/Meapri/alr-termux/releases/download/v${TERMUX_PKG_VERSION}/alr-${TERMUX_PKG_VERSION}-aarch64.tar.gz"
-# PLACEHOLDER until the v0.2.0 release is published -- this is by definition
-# the sha256 of a tarball that does not exist yet.  Copy it from the
-# SHA256SUMS the release job publishes.
-_PRELOAD_TARBALL_SHA256="PLACEHOLDER_v0.2.0_release_tarball_sha256"
+# From the SHA256SUMS the v0.2.0 release job published; verified by
+# downloading the tarball and re-hashing it.
+_PRELOAD_TARBALL_SHA256="a8ac7f97ae5b1cb65ce0ac32e4315cfad73bd61f0be45d9c2a921af5778f8416"
 
 # Fail at the top rather than 200 lines into a build with a confusing 404.
 _alr_refuse_placeholders() {
