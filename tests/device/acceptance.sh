@@ -150,6 +150,29 @@ else
     emit "CLI VERSION DETECTS STALE PRELOAD" SKIP "no second .so to swap in"
 fi
 ckrc "CLI UPDATE COMPONENTS"     0  $ALR update-components
+# Booting without the guest preload is not a degraded mode, it is a different
+# product: every path resolves against Android.  It used to be silent --
+# prepare() simply omits --preload -- and `alr install` even reported success
+# after failing to install it, because the return value was discarded.  The
+# restore is unconditional so a failure here cannot leave the rootfs crippled
+# for every later check.
+_pl="$R/usr/lib/alr/libalr_preload.so"
+if [ -r "$_pl" ]; then
+    mv "$_pl" "$TMPDIR/.alr-pl-save" 2>/dev/null
+    _w=$("$ALR" run /bin/echo hi 2>&1 | grep -c 'reason=preload-missing-in-rootfs')
+    _seen=$("$ALR" run /bin/cat /etc/os-release 2>/dev/null | head -1)
+    mv "$TMPDIR/.alr-pl-save" "$_pl" 2>/dev/null
+    [ "${_w:-0}" -ge 1 ] && emit "CLI WARNS UNVIRTUALIZED BOOT" PASS \
+                         || emit "CLI WARNS UNVIRTUALIZED BOOT" FAIL "no warning"
+    # Positive control for the warning's claim: with no preload the guest must
+    # NOT be able to read the rootfs's /etc/os-release.
+    [ -z "$_seen" ] && emit "CLI UNVIRTUALIZED SEES ANDROID" PASS \
+                    || emit "CLI UNVIRTUALIZED SEES ANDROID" FAIL "read guest file: $_seen"
+    [ -r "$_pl" ] && emit "CLI PRELOAD RESTORED" PASS \
+                  || emit "CLI PRELOAD RESTORED" FAIL "rootfs left without a preload"
+else
+    emit "CLI WARNS UNVIRTUALIZED BOOT" SKIP "no preload in the rootfs to move"
+fi
 # A static guest binary runs but its paths resolve against ANDROID, not the
 # rootfs (ADR 0008).  alr knew and said nothing at every verbosity; the first
 # attempt at this warning fired on /usr/bin/git, because alr_classify only

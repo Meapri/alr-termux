@@ -967,7 +967,16 @@ static int cmd_install(const char *distro, const char *url_override)
     }
 
     repair(part);
-    install_preload(part);
+    /* NOT ignorable.  This used to discard the return value, so a rootfs with
+     * NO path virtualization was reported as a successful install: the warning
+     * scrolled past, cmd_install returned 0, and `alr run` then booted it
+     * anyway because prepare() treats a missing preload as "omit --preload"
+     * rather than as a failure.  The guest would see the ANDROID filesystem
+     * while every message said the install worked.  reason=preload-install-failed
+     * already exists (cmd_update_components emits it). */
+    if (install_preload(part) != 0)
+        die("preload-install-failed",
+            "the rootfs would run WITHOUT path virtualization");
 
     if (rename(part, R) != 0) die("extract-permission", "rename into place failed");
     printf("alr: installed %s\n", R);
@@ -1424,6 +1433,17 @@ static int cmd_run(const char *distro, int argc, char **argv, int login_shell,
     if (rc == -1) die("rootfs-missing", "rootfs not installed; run `alr install`");
     if (rc == -2) die("ldso-missing",
                       "guest ld-linux-aarch64.so.1 not found; rootfs looks corrupt");
+    /* Booting without the preload is not a degraded mode, it is a different
+     * product: every path the guest touches resolves against Android.  It used
+     * to happen silently -- prepare() just omits --preload.  Say it every time,
+     * at every verbosity; this is not a --log-gated detail. */
+    if (!L.have_preload)
+        fprintf(stderr,
+            "alr: WARNING the guest preload is MISSING from this rootfs.\n"
+            "     reason=preload-missing-in-rootfs\n"
+            "     Nothing is path-virtualized: the guest sees the ANDROID\n"
+            "     filesystem, not %s.\n"
+            "     Fix:  alr update-components\n", L.root);
 
     guest_cmd = login_shell ? "/bin/bash" : argv[0];
     if (resolve(&L, guest_cmd, host, sizeof host) != 0)
