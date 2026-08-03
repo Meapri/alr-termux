@@ -71,14 +71,26 @@ jobs:
         run: |
           set -euo pipefail
           v=$(sed -n 's/^#define ALR_VERSION "\(.*\)"$/\1/p' src/common/alr_version.h)
-          tag="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          # Use the SAME expression the checkout step used.  This was
+          # "${GITHUB_REF_NAME:-<input>}", and on a workflow_dispatch
+          # GITHUB_REF_NAME is the selected BRANCH, not the input tag -- it is
+          # always set, so the `:-` fallback was dead code and the check
+          # compared the header against a branch name.  Checkout took the
+          # input; validation has to look at the same thing.
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
           echo "header=$v tag=$tag"
           # A tag that disagrees with the header ships a binary whose `alr
           # version` contradicts its own download URL.  Refuse.
           [ "v$v" = "$tag" ] || { echo "tag $tag != v$v from alr_version.h" >&2; exit 1; }
 
-      - name: host core tests
-        run: make test
+      # `make check`, not `make test`.  The tag path used to run only the host
+      # core tests, so the doc cross-reference gate never ran on a release --
+      # even though README.md ships INSIDE the tarball.  `make check` is
+      # test + check-preload.sh + check-docs.sh + the gate self-test, all of
+      # which are device-free.  (check-preload.sh runs again below because it
+      # is cheap and the ordering there is deliberate.)
+      - name: host core tests, doc links, gate self-test
+        run: make check
 
       - name: preload gates
         run: bash scripts/check-preload.sh

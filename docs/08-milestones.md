@@ -396,14 +396,18 @@ PRELOAD RW REL COST: <= 20 ns/op
 - `bench/regression_gate.py`
 - 참조 디바이스에서 측정한 리포트 (Android 12대 1종 + 15/16대 1종)
 
-> **현재 상태 (2026-08-03) — 숫자는 나왔지만 하네스는 아직 없다.**
-> 위 배수(34.8× / 10.9× / 3.12×)는 **수동 실행**으로 쟀다
-> ([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md), [M12 §4](evidence/2026-08-03-m12-spawn-resolver.md)).
-> `src/cli/alr.c` 에 `bench` 서브커맨드가 없고 `bench/regression_gate.py` 도 없다 — `bench/` 에는
-> `microbench/rw_cost.c` 와 `microbench/notif_cost.c` 뿐이고, 폭 측정은 `tests/device/breadth.sh` 다.
-> 기기도 **MediaTek MT8775 / Android 16 한 대뿐**이라 "Android 12대 1종" 은 측정되지 않았다.
-> **산출물 4줄 중 아래 3줄(`alr bench`, `regression_gate.py`, 2기종 리포트)이 미달**이며, 그렇게 센다 —
-> 숫자가 있다는 것과 아무나 재현할 수 있다는 것은 다르다.
+> **현재 상태 (2026-08-03, 갱신) — 4줄 중 3줄 충족, 남은 하나는 기기다.**
+> - ✅ **하네스**: `tests/device/bench.sh`(A/B), `tests/device/rw_bench.sh`(재작성 총비용).
+>   [M17 §5](evidence/2026-08-03-m17-bench-ab.md)에 적은 대로 `alr bench` **서브커맨드**가 아니라
+>   기기 하네스로 만들었다 — 측정 대상 런타임 안에서 proot 를 오케스트레이션하는 것은 자리가 틀리다.
+> - ✅ **`bench/regression_gate.py`**: 있다. 하드 불변식 + 기기별 회귀 검사 + `--self-test`.
+> - ✅ **2기종 리포트**: [M19](evidence/2026-08-03-m19-snapdragon.md) — MediaTek(커널 6.1)과
+>   Snapdragon 8 Elite(커널 6.6). 차단 집합 239개 동일, 수용 78, 폭 96/96 일치.
+> - ❌ **"Android 12대 1종"**: 두 기기 모두 **Android 16** 이라 여전히 미측정이다. 그리고 그것이
+>   allowlist 가 실제로 따라가는 유일한 축이다([§A6](01-platform-facts.md)).
+>
+> 배수도 갱신됐다: `git status` 10k 는 **25.8×**(양쪽 git 2.53.0 동일)가 인용할 값이고, 34.8× 는
+> 세 실행의 git 빌드가 서로 달랐던 M8 수치다([M19 §6.1](evidence/2026-08-03-m19-snapdragon.md)).
 
 **Exit**: [07-acceptance.md §2 M8](07-acceptance.md) + 다음
 ```

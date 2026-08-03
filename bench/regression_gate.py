@@ -92,6 +92,39 @@ PER_DEVICE_HARD = [
     ("preload.rw_under_ns", 2.5),
 ]
 
+# Absolute per-op CEILINGS -- a ratchet-stop, not a performance budget.
+#
+# These exist because every other per-op check turned out to be SKIPPABLE, and
+# the fallback cannot fail.  REPRODUCED against this file's own first version:
+# a run reporting rw_abs_ns = 4334.7 ns with PRELOAD RW PINNED 0 printed four
+# SKIP lines and "ALR REGRESSION GATE: PASS".  Pinning is an Android cpuset
+# property (only 4 of 8 cpus accept sched_setaffinity on reference #2), so a
+# backgrounded Termux loses it for reasons that have nothing to do with the
+# code -- and with it went the only check with real resolution.
+#
+# rw_total_us cannot cover for it.  With this repo's own baseline mix
+# (28/10072/1/30) the absolute path is 3.4% of the total, so it must regress
+# ~548x before 1500 us goes red, and the 4,334.7 ns/op converter docs/04 §5.1
+# names as the enemy totals 195 us -- PASS with 7.7x headroom.  rw_total_us is
+# a workload-shape detector (an extra syscall per rw() is 3.4 ms, caught 2.3x
+# over); it is not a per-op performance gate and must not be asked to be one.
+#
+# These are NOT the spec's 100/20/40 ns budgets.  Those are properties of the
+# phone (~79 ns on ref #1, 106-115 on ref #2) and that is exactly why they were
+# removed as hard gates.  These sit ~4x above the worst figure ever recorded on
+# either reference device, so no device-to-device spread, thermal state or loss
+# of pinning can reach them, while the converter class (40x+) trips them on any
+# phone in any state.
+#
+# They also bound where --update can walk a baseline: without a ceiling,
+# repeated drifts just under the 2.5x tolerance ratchet the reference anywhere.
+PER_OP_CEILING = [
+    ("preload.rw_abs_ns", 500),     # worst ever recorded 129.3
+    ("preload.rw_rel_ns", 40),      # worst ever recorded   7.4
+    ("preload.rw_sysdir_ns", 150),  # worst ever recorded  32.0
+    ("preload.rw_under_ns", 500),   # worst ever recorded 116.7
+]
+
 # preload.malloc_calls is specified as a hard invariant and NOTHING measures it.
 # It is listed here so the gap is visible in the gate's own output rather than
 # only in a doc footnote.  Do not quietly drop it to make the gate green.
@@ -124,6 +157,7 @@ PAT = {
     # us, not ns -- and anchored to its own line for the reason above.
     "preload.rw_total_us": r"PRELOAD RW TOTAL COST\s+([\d.]+)\s*us",
     "preload.rw_pinned": r"PRELOAD RW PINNED\s+([01])\b",
+    "preload.rw_calls": r"PRELOAD RW CALLS\s+(\d+)",
     # `[^\n]*?`, NOT `.*?` under re.S.  The dot-all version was allowed to run
     # off the end of the NODE COLD line and keep looking; when the harness
     # started printing a spread ("alr 56 [51-60] / proot ..."), the anchor no
@@ -169,7 +203,7 @@ def scrape(paths):
                      or key.startswith("preload.rw_"))
         out[key] = max(vals) if worst_max else vals[-1]
         if key.startswith("supervisor.") or key == "exec_per_sec" \
-                or key == "preload.rw_pinned":
+                or key in ("preload.rw_pinned", "preload.rw_calls"):
             out[key] = int(out[key])
     return out
 
@@ -249,6 +283,97 @@ PRELOAD RW INSTRUMENT: FAIL  buckets sum to 900 but total=1000
 """
 
 
+# Scenario table for the DECISION half of the self-test.
+#
+# The first version of this self-test only checked that the scraper pulled the
+# right numbers out of a transcript.  Three false-greens shipped underneath it,
+# because none of them was a scraping bug -- an unpinned run skipped every
+# per-op check and passed a 46x regression, --update wrote a failing run into
+# the baseline, and an all-zero call mix scored 0.0 us PASS.  A gate's output
+# is a VERDICT; the test has to assert the verdict.
+#
+# (name, transcript, must_fail)
+SELFTEST_DECISIONS = [
+    ("unpinned run with a 46x absolute regression", """\
+ALR BENCH DEVICE: SELFTEST-1/plat/android16/6.6
+  PRELOAD RW PINNED 0 cpu=-1
+    PRELOAD RW ABS COST        4334.7 ns  (ref <=  100)  RECORDED
+    PRELOAD RW REL COST           7.0 ns  (ref <=   20)  RECORDED
+    PRELOAD RW SYSDIR COST       32.0 ns  (ref <=   40)  RECORDED
+    PRELOAD RW UNDER COST       116.7 ns  (ref <=  100)  RECORDED
+    PRELOAD RW TOTAL COST      195.4 us  <= 1500  PASS
+    PRELOAD RW CALLS 10101
+path_traps=0 syscall_stops=0
+""", True),
+    ("pinned run, converter on the absolute path", """\
+ALR BENCH DEVICE: SELFTEST-1/plat/android16/6.6
+  PRELOAD RW PINNED 1 cpu=5
+    PRELOAD RW ABS COST        4334.7 ns  (ref <=  100)  RECORDED
+    PRELOAD RW REL COST           7.0 ns  (ref <=   20)  RECORDED
+    PRELOAD RW SYSDIR COST       32.0 ns  (ref <=   40)  RECORDED
+    PRELOAD RW UNDER COST       116.7 ns  (ref <=  100)  RECORDED
+    PRELOAD RW TOTAL COST      195.4 us  <= 1500  PASS
+    PRELOAD RW CALLS 10101
+path_traps=0 syscall_stops=0
+""", True),
+    ("clean pinned run on an unseen device", """\
+ALR BENCH DEVICE: SELFTEST-UNSEEN/plat/android16/6.6
+  PRELOAD RW PINNED 1 cpu=5
+    PRELOAD RW ABS COST          93.0 ns  (ref <=  100)  RECORDED
+    PRELOAD RW REL COST           7.0 ns  (ref <=   20)  RECORDED
+    PRELOAD RW SYSDIR COST       32.0 ns  (ref <=   40)  RECORDED
+    PRELOAD RW UNDER COST       116.7 ns  (ref <=  100)  RECORDED
+    PRELOAD RW TOTAL COST       76.6 us  <= 1500  PASS
+    PRELOAD RW CALLS 10101
+path_traps=0 syscall_stops=0
+""", True),   # unbaselined device must not be silently unfailable
+    ("clean pinned run on a known device (must PASS)", """\
+ALR BENCH DEVICE: SELFTEST-1/plat/android16/6.6
+  PRELOAD RW PINNED 1 cpu=5
+    PRELOAD RW ABS COST          95.0 ns  (ref <=  100)  RECORDED
+    PRELOAD RW REL COST           7.1 ns  (ref <=   20)  RECORDED
+    PRELOAD RW SYSDIR COST       32.4 ns  (ref <=   40)  RECORDED
+    PRELOAD RW UNDER COST       118.0 ns  (ref <=  100)  RECORDED
+    PRELOAD RW TOTAL COST       77.0 us  <= 1500  PASS
+    PRELOAD RW CALLS 10101
+path_traps=0 syscall_stops=0
+""", False),
+    ("supervisor started stopping syscalls", """\
+ALR BENCH DEVICE: SELFTEST-1/plat/android16/6.6
+  PRELOAD RW PINNED 1 cpu=5
+    PRELOAD RW ABS COST          93.0 ns  (ref <=  100)  RECORDED
+    PRELOAD RW REL COST           7.0 ns  (ref <=   20)  RECORDED
+    PRELOAD RW SYSDIR COST       32.0 ns  (ref <=   40)  RECORDED
+    PRELOAD RW UNDER COST       116.7 ns  (ref <=  100)  RECORDED
+    PRELOAD RW TOTAL COST       76.6 us  <= 1500  PASS
+    PRELOAD RW CALLS 10101
+path_traps=0 syscall_stops=9912
+""", True),
+]
+
+
+def _run_decision(transcript, baseline):
+    """Run the gate's decision logic on a transcript against a fixed baseline."""
+    import tempfile
+    global BASELINE
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
+                                     encoding="utf-8") as f:
+        f.write(transcript); tpath = f.name
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False,
+                                     encoding="utf-8") as f:
+        json.dump(baseline, f); bpath = f.name
+    saved, BASELINE = BASELINE, bpath
+    import io as _io, contextlib
+    buf = _io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = main_with(["--from", tpath])
+    finally:
+        BASELINE = saved
+        os.unlink(tpath); os.unlink(bpath)
+    return rc, buf.getvalue()
+
+
 def self_test():
     import tempfile
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
@@ -271,6 +396,23 @@ def self_test():
     if extra:
         print("  unexpected keys scraped: %s" % sorted(extra))
         bad += 1
+    # Decision control: the gate must FAIL each scenario below.  Scraping the
+    # right numbers is not the same as reaching the right verdict, and all
+    # three false-greens this test now covers were verdict bugs.
+    base = {"devices": {"SELFTEST-1/plat/android16/6.6": {
+        "preload.rw_abs_ns": 93.0, "preload.rw_rel_ns": 7.0,
+        "preload.rw_sysdir_ns": 32.0, "preload.rw_under_ns": 116.7,
+        "preload.rw_pinned": 1}}}
+    for name, transcript, must_fail in SELFTEST_DECISIONS:
+        rc, out = _run_decision(transcript, base)
+        ok = (rc != 0) if must_fail else (rc == 0)
+        print("  %-28s %s  %s -> rc=%d"
+              % ("decision", "ok  " if ok else "FAIL", name, rc))
+        if not ok:
+            bad += 1
+            for line in out.splitlines():
+                print("        | %s" % line)
+
     # Negative control: refusals must produce no facts at all.
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
                                      encoding="utf-8") as f:
@@ -294,7 +436,7 @@ def self_test():
     return 1 if bad else 0
 
 
-def main():
+def main_with(argv=None):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--from", dest="inputs", nargs="*", default=[],
@@ -303,9 +445,11 @@ def main():
                     help="check artifact invariants only (CI, no device)")
     ap.add_argument("--update", action="store_true",
                     help="rewrite bench/baseline.json from these facts")
+    ap.add_argument("--allow-new-device", action="store_true",
+                    help="permit recording a first baseline for an unseen device")
     ap.add_argument("--self-test", action="store_true",
                     help="check the scraper against a canned transcript (no device)")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     if args.self_test:
         return self_test()
@@ -330,7 +474,7 @@ def main():
     for n in notes:
         print("  NOTE  %s" % n)
 
-    failed = warned = checked = 0
+    failed = warned = checked = new_device = 0
 
     for key, desc, ok in HARD:
         if key not in facts:
@@ -380,6 +524,26 @@ def main():
     # Per-device HARD regression checks (see PER_DEVICE_HARD).  Absent is a
     # failure, exactly like the absolute hard invariants: a gate that skips
     # what it cannot see reports green on an empty file.
+    # Absolute ceilings run FIRST and are never skipped -- not for an unpinned
+    # run, not for a device with no baseline, not for a pin-state mismatch.
+    # An unpinned measurement is imprecise, not free.
+    for key, ceil in PER_OP_CEILING:
+        if key not in facts:
+            if args.build_only:
+                print("  %-28s SKIP    build-only run" % (key + " ceiling"))
+            else:
+                print("  %-28s ABSENT  not in the given output" % (key + " ceiling"))
+                failed += 1
+            continue
+        checked += 1
+        v = facts[key]
+        if v > ceil:
+            print("  %-28s FAIL    %.1f > %d (absolute ceiling)"
+                  % (key + " ceiling", v, ceil))
+            failed += 1
+        else:
+            print("  %-28s PASS    %.1f <= %d" % (key + " ceiling", v, ceil))
+
     # An unpinned run's per-op numbers are not comparable with a pinned
     # baseline -- that difference is precisely what pinning exists to remove
     # (bimodal big.LITTLE placement, a 1.7x effect).  Refuse the comparison
@@ -400,9 +564,10 @@ def main():
 
     for key, tol in PER_DEVICE_HARD:
         if not pin_ok:
-            # Not a pass. Announce each skipped key so the gate's output never
-            # reads as though these were checked.
-            print("  %-28s SKIP    pin-state mismatch (see above)" % key)
+            # Not a pass, and not unchecked either: the absolute ceiling above
+            # ran for this same key regardless of pin state.  What is skipped
+            # is only the tight per-device tolerance.
+            print("  %-28s SKIP    pin state (ceiling above still applied)" % key)
             continue
         if key not in facts:
             # Device facts cannot exist on a hosted runner; --build-only says
@@ -416,7 +581,12 @@ def main():
         v = facts[key]
         prev = (dev_baseline or {}).get(key)
         if prev is None:
-            print("  %-28s BASELINE  %.1f (first record for this device)" % (key, v))
+            # A first run on a new device is otherwise unfailable by
+            # construction, and whatever it measured becomes the permanent
+            # reference -- including a regression.  Recording one has to be a
+            # deliberate act.
+            print("  %-28s BASELINE  %.1f (no baseline for this device)" % (key, v))
+            new_device += 1
             continue
         checked += 1
         if v > prev * tol:
@@ -448,7 +618,26 @@ def main():
         else:
             print("  %-28s ok      %s (prev %s)" % (key, v, prev))
 
+    if new_device and not args.allow_new_device:
+        print("  %-28s FAIL    %d per-op key(s) have no baseline for this device"
+              % ("new device", new_device))
+        print("        the tolerance check cannot run; the absolute ceilings did.")
+        print("        Re-run with --allow-new-device --update to record one.")
+        failed += 1
+
     if args.update:
+        # Refusing to write a baseline from a failing run is the whole point.
+        # REPRODUCED on the first version of this file: a run failing
+        # "rw_abs_ns 4334.7 > 93.0*2.50" still wrote 4334.7 into
+        # bench/baseline.json and exited 1, so the NEXT run was green.  That is
+        # a goalpost move implemented inside the gate.
+        if failed and not (args.allow_new_device and failed == 1 and new_device):
+            die("refusing --update on a failing run: %d hard check(s) failed. "
+                "Writing these numbers to the baseline would make the next run "
+                "green by redefining the reference -- the exact move this gate "
+                "exists to prevent. Fix the regression first, or pass "
+                "--allow-new-device if the only failure is an unbaselined "
+                "device." % failed)
         if device is None:
             die("--update needs a device identity. Run tests/device/bench.sh so "
                 "the output carries an 'ALR BENCH DEVICE:' line; a baseline "
@@ -470,6 +659,10 @@ def main():
     print("  hard checked=%d failed=%d   soft warnings=%d" % (checked, failed, warned))
     print("ALR REGRESSION GATE: %s" % ("FAIL" if failed else "PASS"))
     return 1 if failed else 0
+
+
+def main():
+    return main_with()
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@
 > ([M15](evidence/2026-08-03-m15-cmdline-2604.md)). 두 `KNOWN_FAIL`은
 > `ALR CODEX LINKAGE:static-unhooked`와 `PRELOAD DEV FULL ENOSPC:non-goal-devfull`이며,
 > 둘 다 아래에 이유를 적어 두었다. 기기는 MediaTek MT8775 / Android 16 /
-> 커널 `6.1.145-android14` / `untrusted_app_27` / `Seccomp=2` 한 대뿐이다.
+> 커널 `6.1.145-android14` / `untrusted_app_27` / `Seccomp=2`. **2026-08-03 부터 참조 기기 #2**(Snapdragon 8 Elite / 커널 `6.6.98-android15`)가 추가됐고, 수용·폭·차단집합이 모두 일치한다([M19](evidence/2026-08-03-m19-snapdragon.md)).
 >
 > ⚠️ **아래 블록은 목표 문자열이지 스위트의 출력이 아니다.** 실제로 emit 되는 이름의 집합은
 > `tests/host/`와 `tests/device/acceptance.sh`이고, 여기 적힌 이름 중 다수는 그 어느 쪽도 내지
@@ -372,7 +372,7 @@ result         PASS | FAIL | KNOWN_FAIL:<reason>
 - **V8 JIT + W^X mmap churn 의 proot 오버헤드 분리.** 판정 방법: `node -e` 로 JIT 압력이 큰/없는
   두 워크로드를 같은 node 바이너리로 양쪽에서 돌려 차이를 뺀다. 막는 것: `alr bench` 부재.
 - **Node cold start 의 proot 비용** (§2 M8 `ALR BENCH NODE COLD vs PROOT`).
-- **스냅드래곤 재측정.** 위 숫자는 전부 MediaTek MT8775 한 대에서 나왔다. SoC 가 바뀌면 ptrace 왕복
+- ~~**스냅드래곤 재측정.**~~ **완료** — [M19 §6](evidence/2026-08-03-m19-snapdragon.md). 다만 배수는 기기마다 달라 인용 시 기기를 함께 적는다. SoC 가 바뀌면 ptrace 왕복
   비용이 바뀔 수 있다 — 이 기기의 호출당 ≈167 µs 는 [§D1](01-platform-facts.md)의 5~20 µs 모델보다
   크고, 그 자체로 별도 확인 가치가 있다.
 

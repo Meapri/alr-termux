@@ -78,7 +78,7 @@
 
 출처: [M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md), [M12 §4](evidence/2026-08-03-m12-spawn-resolver.md).
 
-**세 줄 모두 참조 기기 #1(MediaTek MT8775) 단일 세션 값이다.** `git` 비교는 세 실행의 git 빌드가 다르고 proot 쪽 rootfs 도 달라 그만큼 약하다. `npm ci` 는 node 바이너리·락파일·캐시를 복사해 그 결함을 제거했지만 베이스 배포판이 다르다(alr 24.04 vs proot 26.04). 그래서 헤드라인은 M7/M8 이 정한 표현 — "동일 기기·동일 워크로드에서 `git status` 30배 이상, 기동 10배 이상, 단일 기기 1회 세션" — 을 넘지 않는다. 스냅드래곤 배수는 아직 아무 값도 없다.
+**세 줄 모두 참조 기기 #1(MediaTek MT8775) 단일 세션 값이다.** `git` 비교는 세 실행의 git 빌드가 다르고 proot 쪽 rootfs 도 달라 그만큼 약하다. `npm ci` 는 node 바이너리·락파일·캐시를 복사해 그 결함을 제거했지만 베이스 배포판이 다르다(alr 24.04 vs proot 26.04). 그래서 헤드라인은 M7/M8 이 정한 표현 — "동일 기기·동일 워크로드에서 `git status` 30배 이상, 기동 10배 이상, 단일 기기 1회 세션" — 을 넘지 않는다. 스냅드래곤 배수는 이제 있다 — `git status` 10k 25.8×, `node` 콜드 5.49× ([M19 §6](evidence/2026-08-03-m19-snapdragon.md)). **배수는 기기별이므로 기기를 함께 인용한다.**
 
 ### I9. permissive 디바이스의 측정은 무효
 
@@ -188,7 +188,7 @@ ssh -p 8022 localhost
 
 **"해봤더니 되더라"는 SOURCE가 아니다.** 특히 permissive 디바이스나 한 대의 디바이스에서만 확인한 것은 `PENDING_DEVICE`다.
 
-> **이 규칙은 지금 우리 자신에게 걸려 있다.** 2026-08-03 기준 이 저장소의 필드 증거는 전부 **참조 기기 #1 한 대**에서 나왔다 — MediaTek MT8775 / Android 16 / kernel 6.1.145-android14 / `getenforce=Enforcing` / `Seccomp: 2` ([브링업 기록](evidence/2026-08-02-device-bringup.md)).
+> **이 규칙은 지금 우리 자신에게 걸려 있다.** 2026-08-03 기준 이 저장소의 필드 증거는 **참조 기기 2대**(MediaTek 커널 6.1, Snapdragon 8 Elite 커널 6.6, 둘 다 Android 16)에서 나왔다 — MediaTek MT8775 / Android 16 / kernel 6.1.145-android14 / `getenforce=Enforcing` / `Seccomp: 2` ([브링업 기록](evidence/2026-08-02-device-bringup.md)).
 >
 > 규칙을 그대로 적용하면 셋으로 갈린다.
 >
@@ -196,9 +196,9 @@ ssh -p 8022 localhost
 > - **차단 syscall 집합은 아니다.** allowlist 는 릴리스마다 자랐고(android12 365줄 → android16 392줄), 이 기기에서 이미 **AOSP 유래 예측이 반증되었다** — `openat2`(437)·`faccessat2`(439) 를 차단으로 예측했는데 실측은 허용이었다([브링업 §P4](evidence/2026-08-02-device-bringup.md)). [§A6](01-platform-facts.md) 가 이 항목을 아직 열어 둔 이유가 그것이다.
 > - **성능 배수**도 아니다 — 이 기기의 값일 뿐이고, ptrace 왕복이 호출당 ≈167 µs 로 [§D1](01-platform-facts.md)의 5~20 µs 모델보다 훨씬 비싼 것이 이 기기/커널 특성일 가능성이 남아 있다([M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)).
 >
-> 끝내는 데 필요한 측정도 **하나가 아니라 둘**이다. 성능 쪽은 다른 기기에서 같은 벤치를 재실행해 두 기기의 `relative_to_proot` 를 나란히 싣는 것이고, 호환성 쪽은 벤치가 아니라 **`alr doctor` 스윕을 다시 돌려 `src/supervisor/alr_sigsys_table.h` 의 ground truth 와 diff** 하는 것이다. diff 가 0이면 표를 상수로 취급할 수 있고, 아니면 표는 영구히 기기별 생성물로 남아야 한다([§A6](01-platform-facts.md)).
+> 끝내는 데 필요한 측정은 **둘이었고 둘 다 했다.** 성능 쪽은 두 기기의 배수를 나란히 실었고([M19 §6.3](evidence/2026-08-03-m19-snapdragon.md)), 호환성 쪽은 `alr doctor` 스윕을 다시 돌려 diff 했다 — **diff 는 0이다.** 239개 집합이 완전히 같으므로 `src/supervisor/alr_sigsys_table.h` 는 상수(기본값)로 취급할 수 있다([§A6](01-platform-facts.md)).
 >
-> 기기도 하나로는 부족하다 — [§A6](01-platform-facts.md) 는 **다른 OEM/SoC 한 대와 Android 12~15 한 대**를 각각 다른 질문에 요구한다. 오늘 막는 것은 그 두 대가 없다는 사실이다.
+> **남은 기기는 하나다** — [§A6](01-platform-facts.md) 가 요구한 둘 중 "다른 OEM/SoC 한 대"는 확보했고, **Android 12~15 한 대**만 남았다. 그리고 그쪽이 더 중요한 축이다: 갈린 것(벤더·커널)은 전부 무관했는데 정작 allowlist 가 따라가는 축은 고정돼 있었다.
 
 ## 7. 하지 말아야 할 유혹들
 

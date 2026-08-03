@@ -46,7 +46,7 @@ adb shell → uid=2000(shell) context=u:r:shell:s0  Seccomp: 0  Seccomp_filters:
 ```
 
 > **성능 측정 주의**: 이 기기는 MediaTek이다. seccomp/SELinux/exec 정책은 전부 AOSP 레벨이라 SoC와 무관하게 이 기기의 **호환성 결과는 그대로 유효**하지만, 벤치마크 배수는 이 기기 것이다.
-> 실제로 M8은 참조 기기 #2 없이 이 기기에서 돌았다: 10k 파일 `git status` native 42 ms / alr 49 ms / proot-distro 1,704 ms → **34.8배**, 프로세스 기동 24 / 28 / 304 ms → **10.9배** ([증거](evidence/2026-08-02-m7-m8-workloads-perf.md)), `npm ci` proot 6.25 s vs alr 2.00 s → **3.12배** ([증거](evidence/2026-08-03-m12-spawn-resolver.md)). **그러므로 배수를 인용할 때는 "MediaTek MT8775 / Android 16 기준"을 함께 쓴다.** 스냅드래곤 기기에서의 재측정은 여전히 남은 일이며, 그것이 참조 기기 #2가 필요한 두 번째 이유다(첫 번째는 §A6의 차단 집합 일반화).
+> 실제로 M8은 참조 기기 #2 없이 이 기기에서 돌았다: 10k 파일 `git status` native 42 ms / alr 49 ms / proot-distro 1,704 ms → **34.8배**, 프로세스 기동 24 / 28 / 304 ms → **10.9배** ([증거](evidence/2026-08-02-m7-m8-workloads-perf.md)), `npm ci` proot 6.25 s vs alr 2.00 s → **3.12배** ([증거](evidence/2026-08-03-m12-spawn-resolver.md)). **그러므로 배수를 인용할 때는 "MediaTek MT8775 / Android 16 기준"을 함께 쓴다.** **두 이유 모두 해소됐다** — 참조 기기 #2(Snapdragon 8 Elite)에서 재측정했고([M19 §6](evidence/2026-08-03-m19-snapdragon.md)), §A6의 차단 집합도 동일함을 확인했다. 다만 배수는 기기마다 다르므로(`node` 콜드 6.60× vs 5.49×) **인용할 때 기기를 함께 쓴다.**
 
 `run-as`가 debug 서명 빌드에서 동작한다는 이유로 쓰면 안 된다 — zygote를 거치지 않아 필터가 없고, SELinux 도메인도 다르다. 진입 절차는 [scripts/dev-bootstrap.md](../scripts/dev-bootstrap.md).
 

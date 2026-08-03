@@ -293,6 +293,22 @@ int main(int argc, char **argv)
      * on the same device in the same session, and each bucket is priced with
      * its own measured cost.  Nothing here is estimated.
      */
+    /* A zero mix is a dead instrument, not a workload with no cost.
+     *
+     * have_mix was positional only (argc > 6) and atof("") is 0, so a caller
+     * that supplied zeros -- which is what a preload that never loaded, an
+     * ALR_COUNT that never reached the guest, or an fd collision all produce
+     * -- got "PRELOAD RW TOTAL COST 0.0 us <= 1500 PASS": a perfect score for
+     * having measured nothing.  REPRODUCED: `rw_cost <root> 20000 0 0 0 0`
+     * printed exactly that and exited 0.  The deliberate ABSENT branch below
+     * was unreachable for that caller. */
+    if (have_mix && (c_rw + c_rel + c_sys + c_under) <= 0) {
+        printf("\n  PRELOAD RW INSTRUMENT: FAIL  the supplied call mix is all"
+               " zero;\n    that is a dead instrument, not a workload with no"
+               " cost.\n");
+        return 1;
+    }
+
     if (have_mix) {
         double total_us = (c_rw * abs_ns + c_rel * rel_ns +
                            c_sys * sys_ns + c_under * under_ns) / 1000.0;
@@ -303,6 +319,10 @@ int main(int argc, char **argv)
                c_rw, c_rel, c_sys, c_under);
         printf("    PRELOAD RW TOTAL COST %10.1f us  <= 1500  %s\n",
                total_us, ok ? "PASS" : "FAIL");
+        /* The budget is for a SPECIFIC workload.  Emit the call total so the
+         * consumer can refuse a number produced from a different one. */
+        printf("    PRELOAD RW CALLS %.0f\n",
+               c_rw + c_rel + c_sys + c_under);
     } else {
         printf("\n  PRELOAD RW TOTAL COST  ABSENT  no call mix supplied;\n");
         printf("    run tests/device/rw_bench.sh, which measures it with\n");

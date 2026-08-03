@@ -3,15 +3,17 @@
 `alr`을 폰이나 태블릿에 올려서 Ubuntu 24.04 arm64 게스트를 띄우기까지의 절차다.
 개발자용 온디바이스 루프는 [scripts/dev-bootstrap.md](../scripts/dev-bootstrap.md)에 따로 있다.
 
-> **선행 릴리스다.** 참조 디바이스는 현재 1대(MediaTek arm64, Android 16)뿐이다.
-> 다른 SoC·다른 Android 버전에서의 동작은 아직 검증되지 않았다.
+> **선행 릴리스다.** 참조 디바이스는 **2대 — MediaTek(커널 6.1)과 Snapdragon 8 Elite(커널 6.6), 둘 다 Android 16.**
+> 두 기기의 zygote 차단 syscall 239개 집합이 완전히 동일하므로 **SoC·커널 축은 검증됐다**
+> ([M19](evidence/2026-08-03-m19-snapdragon.md)).
+> **다른 Android 버전(12~15)은 여전히 미검증이다** — bionic allowlist 가 릴리스마다 커지므로 이것이 남은 위험이다.
 
 ## 1. 기기 요구사항
 
 | 항목 | 요구 | 확인 방법 |
 |---|---|---|
 | CPU | **arm64 (aarch64)** 전용 | `uname -m` 이 `aarch64` |
-| Android | **12 ~ 16** (설계 타깃). **실제로 검증된 것은 16 한 대뿐** — 12~15는 UNVERIFIED | 설정 → 휴대전화 정보 |
+| Android | **12 ~ 16** (설계 타깃). **검증된 것은 16뿐** (벤더 2곳, 커널 6.1·6.6) — 12~15는 UNVERIFIED | 설정 → 휴대전화 정보 |
 | Termux | **F-Droid 또는 GitHub 릴리스 빌드** (`targetSdkVersion=28`) | §2 |
 | 루팅 | 불필요. **루팅했다면 오히려 검증 대상이 아니다** | §5 |
 | 저장 공간 | ubuntu-base tarball 약 30 MB + 추출 후 rootfs. `git`까지 넣으면 수백 MB | |
@@ -39,7 +41,7 @@ targetSdk ≥ 29인 앱은 SELinux `untrusted_app` 도메인을 받고, 이 도�
 `execute_no_trans` 권한이 없다. Play 빌드의 termux-exec는 `/system/bin/linker64`를 대신 실행시키는 우회를 쓰는데,
 **그건 bionic 링커라 glibc 프로그램을 로드할 수 없다.** `alr`의 게스트는 전부 glibc다.
 
-Play 빌드에 깔았을 때 나올 신호는 `alr-doctor`의 P3 프로브일 것이다 (**UNVERIFIED — Play 빌드는 측정한 적이 없다.** 참조 기기는 F-Droid 빌드 1대뿐이다). 앱 데이터 경로의 ELF를
+Play 빌드에 깔았을 때 나올 신호는 `alr-doctor`의 P3 프로브일 것이다. **Play 빌드가 `targetSdk=37` 을 싣는다는 전제는 이제 실측됐지만**([M19 §3](evidence/2026-08-03-m19-snapdragon.md)), **거기서 `alr` 이 실패하는 것까지 잰 것은 아니다** — GitHub 빌드를 설치하려면 서명이 달라 Play 빌드를 먼저 지워야 했다. 앱 데이터 경로의 ELF를
 execve 해 보고 실패하면 이렇게 말한다:
 
 ```
@@ -93,7 +95,7 @@ Termux를 한 번 실행해 부트스트랩이 풀리기를 기다린 뒤, 릴�
 ```bash
 # Termux 안에서. 인증 없이 그대로 동작한다 (익명 curl 로 검증).
 pkg install -y curl tar
-V=0.1.0        # src/common/alr_version.h 의 ALR_VERSION 과 같아야 한다
+V=0.2.0        # src/common/alr_version.h 의 ALR_VERSION 과 같아야 한다
 curl -fsSLO https://github.com/Meapri/alr-termux/releases/download/v$V/alr-$V-aarch64.tar.gz
 tar -C "$PREFIX" -xzf alr-$V-aarch64.tar.gz
 alr version
