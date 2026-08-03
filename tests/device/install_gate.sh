@@ -70,9 +70,44 @@ mkdir -p "$GATE_ROOT"
 # --url makes cmd_install skip release discovery entirely, and the distro name
 # keys the cache entry, so `alrgate` forces a fetch of the file:// URL rather
 # than silently reusing the ubuntu-24.04 entry.
-ALR_ROOT_DIR="$GATE_ROOT" "$ALR" install "$NAME" --url "file://$SRC" >/dev/null 2>&1
+ALR_ROOT_DIR="$GATE_ROOT" "$ALR" install "$NAME" --url "file://$SRC" \
+    >"$GATE_ROOT/install.log" 2>&1
 rc=$?
 [ "$rc" = 0 ] && emit "INSTALL EXIT" PASS || emit "INSTALL EXIT" FAIL "rc=$rc"
+
+# ── the nine-line first-boot report (docs/05 §4) ────────────────────────
+# All nine names, in order, or the report is not the report.  Checked by NAME
+# and not by counting lines: a report that dropped BOOT and printed something
+# else twice would have the same line count.
+missing=
+for n in "INSTALL DOWNLOAD" "INSTALL VERIFY SHA256" "INSTALL EXTRACT" \
+         "INSTALL REPAIR" "INSTALL LDSO PRESENT" "INSTALL LDSO OPTIONS" \
+         "INSTALL BOOT /bin/true" "INSTALL BOOT /bin/echo" \
+         "INSTALL GLIBC VERSION"; do
+    grep -q "^$n:" "$GATE_ROOT/install.log" || missing="$missing $n"
+done
+[ -z "$missing" ] && emit "INSTALL REPORT NINE LINES" PASS \
+                  || emit "INSTALL REPORT NINE LINES" FAIL "absent:$missing"
+
+# The two that are checks rather than restatements of what just happened: the
+# loader must offer the four options ADR 0002 depends on, and the rootfs must
+# actually execute something through the full `alr run` path.
+grep -q "^INSTALL LDSO OPTIONS: *PASS  argv0=yes preload=yes library-path=yes inhibit-cache=yes" \
+     "$GATE_ROOT/install.log" \
+    && emit "INSTALL REPORT LDSO OPTIONS" PASS \
+    || emit "INSTALL REPORT LDSO OPTIONS" FAIL \
+            "$(grep -m1 "^INSTALL LDSO OPTIONS" "$GATE_ROOT/install.log")"
+grep -q "^INSTALL BOOT /bin/echo: *PASS  stdout=\"alr\"" "$GATE_ROOT/install.log" \
+    && emit "INSTALL REPORT BOOT ECHO" PASS \
+    || emit "INSTALL REPORT BOOT ECHO" FAIL \
+            "$(grep -m1 "^INSTALL BOOT /bin/echo" "$GATE_ROOT/install.log")"
+
+# An unverified download must not be laundered into PASS.  This install used
+# --url, so there is no digest and the only honest token is SKIP.
+grep -q "^INSTALL VERIFY SHA256: *SKIP" "$GATE_ROOT/install.log" \
+    && emit "INSTALL REPORT UNVERIFIED IS SKIP" PASS \
+    || emit "INSTALL REPORT UNVERIFIED IS SKIP" FAIL \
+            "$(grep -m1 "^INSTALL VERIFY SHA256" "$GATE_ROOT/install.log")"
 
 # Hardlink members are the ones that broke silently before: tar cannot create
 # them under Android's SELinux policy and M3 recorded these exact two vanishing.
@@ -115,6 +150,58 @@ rc=$?
 [ "$rc" != 0 ] && emit "INSTALL REJECTS TRUNCATED" PASS "rc=$rc" \
                || emit "INSTALL REJECTS TRUNCATED" FAIL "reported success on a truncated tarball"
 rm -rf "$GATE_ROOT/trunc"
+
+# (a2) THE NEGATIVE CONTROL FOR THE BOOT CHECK ITSELF.  A truncated tarball
+# dies at verify_rootfs, BEFORE the report, so it proves nothing about the boot
+# check.  This builds a tarball that has exactly the four files verify_rootfs
+# looks for and nothing that works -- so extraction succeeds, the file check
+# succeeds, and the only thing that can catch it is actually running it.
+# Without this, INSTALL BOOT /bin/true: PASS would be a line that has never
+# been observed to say anything else.
+FAKE="$GATE_ROOT/fakesrc"
+rm -rf "$FAKE"; mkdir -p "$FAKE/lib" "$FAKE/bin" "$FAKE/usr/bin" "$FAKE/etc"
+printf 'not an elf' > "$FAKE/lib/ld-linux-aarch64.so.1"
+printf 'not an elf' > "$FAKE/bin/sh"
+printf 'not an elf' > "$FAKE/usr/bin/env"
+printf 'ID=ubuntu\n'  > "$FAKE/etc/os-release"
+chmod 755 "$FAKE/lib/ld-linux-aarch64.so.1" "$FAKE/bin/sh" "$FAKE/usr/bin/env"
+tar -czf "$CACHE/fake.tar.gz" -C "$FAKE" . 2>/dev/null
+rm -rf "$GATE_ROOT/fake"
+out=$(ALR_ROOT_DIR="$GATE_ROOT" "$ALR" install fake \
+      --url "file://$CACHE/fake.tar.gz" 2>&1)
+rc=$?
+if [ "$rc" != 0 ] && grep -q 'reason=rootfs-unbootable' <<<"$out"; then
+    # ...and it must be LEFT IN PLACE, not deleted (docs/05 §4).
+    if [ -d "$GATE_ROOT/fake" ]; then
+        emit "INSTALL REJECTS UNBOOTABLE" PASS "rc=$rc, rootfs left for inspection"
+    else
+        emit "INSTALL REJECTS UNBOOTABLE" FAIL "correctly refused, but DELETED the rootfs"
+    fi
+else
+    emit "INSTALL REJECTS UNBOOTABLE" FAIL \
+         "rc=$rc on a rootfs whose /bin/sh is the text 'not an elf'"
+fi
+rm -rf "$GATE_ROOT/fake" "$CACHE/fake.tar.gz" "$FAKE"
+
+# (a3) `alr install -d <name>` -- the form every other subcommand accepts --
+# used to install a rootfs literally NAMED "-d" and report success, because the
+# option scan took argv[i+1] as the distro whatever it was and "-d" is legal
+# under distro_name_ok().
+rm -rf "$GATE_ROOT/dashd"
+ALR_ROOT_DIR="$GATE_ROOT" "$ALR" install -d dashd \
+    --url "file://$SRC" >/dev/null 2>&1
+if [ -d "$GATE_ROOT/dashd" ] && [ ! -e "$GATE_ROOT/-d" ]; then
+    emit "INSTALL DASH D IS A FLAG" PASS
+else
+    emit "INSTALL DASH D IS A FLAG" FAIL \
+         "$([ -e "$GATE_ROOT/-d" ] && echo 'installed a rootfs named -d' || echo 'did not install dashd')"
+fi
+rm -rf "$GATE_ROOT/dashd" "$GATE_ROOT/-d"
+
+o=$(ALR_ROOT_DIR="$GATE_ROOT" "$ALR" install "$NAME" --bogus 2>&1)
+grep -q 'reason=install-unknown-option' <<<"$o" \
+    && emit "INSTALL REFUSES UNKNOWN OPTION" PASS \
+    || emit "INSTALL REFUSES UNKNOWN OPTION" FAIL "$o"
 
 # (b) an unusable preload must not boot silently.  glibc WARNS and IGNORES an
 # LD_PRELOAD object it cannot load, so the guest comes up unvirtualized -- the

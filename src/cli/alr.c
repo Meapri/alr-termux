@@ -28,7 +28,9 @@ void alr_resolvd_stop(void);
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -302,12 +304,14 @@ static int copy_file(const char *from, const char *to)
  * A copy is NOT equivalent: st_nlink stays 1 and edits do not propagate.  For
  * a freshly extracted, read-mostly rootfs that is acceptable; the general fix
  * for guest-created hardlinks is the preload's link2symlink layer (ADR 0004). */
-static int fix_hardlinks(const char *tarball, const char *root)
+static int fix_hardlinks(const char *tarball, const char *root,
+                         long *members_out, long *special_out)
 {
     char cmd[ALR_PBUF * 2];
     char line[ALR_PBUF * 2];
     FILE *fp;
     int made = 0, copied = 0, failed = 0;
+    long members = 0, special = 0;
 
     snprintf(cmd, sizeof cmd, "tar -tvzf '%s' 2>/dev/null", tarball);
     fp = popen(cmd, "r");
@@ -318,6 +322,12 @@ static int fix_hardlinks(const char *tarball, const char *root)
         char *sep = strstr(line, " link to ");
         char *name;
         size_t k;
+
+        members++;
+        /* Members tar cannot create here and we do not want: device nodes and
+         * fifos.  Counted from the listing we are already reading rather than
+         * from a second decompression pass. */
+        if (line[0] == 'c' || line[0] == 'b' || line[0] == 'p') special++;
 
         if (!sep || line[0] != 'h') continue;    /* 'h' = hardlink member */
         *sep = '\0';
@@ -339,6 +349,8 @@ static int fix_hardlinks(const char *tarball, const char *root)
         else                          failed++;
     }
     pclose(fp);
+    if (members_out) *members_out = members;
+    if (special_out) *special_out = special;
 
     if (made || copied || failed)
         printf("alr: hardlink members: %d linked, %d copied, %d failed\n",
@@ -1055,14 +1067,194 @@ static int cmd_remove(const char *distro, int force)
     return 0;
 }
 
+
+/* ── first-boot verification report (docs/05-provisioning-spec.md §4) ─────
+ *
+ * `alr install` used to check four files for existence and call it done.  That
+ * catches a TRUNCATED tarball (measured: install reported success from a 2 MB
+ * one) but nothing about whether the rootfs actually RUNS.  A rootfs can
+ * extract perfectly and still be unusable -- a loader for the wrong arch, a
+ * loader too old for the options ADR 0002 requires, a preload that fails to
+ * load -- and every one of those looks like a clean install right up until the
+ * user's first command fails with something unrelated-looking.
+ *
+ * So the last thing install does is boot the thing it just built, and say so
+ * in nine lines.  Per §4, a failure LEAVES the rootfs in place and reports
+ * clearly rather than deleting it: the user may want to look at it, and this
+ * runs after the rename, so deleting would be the one code path that removes a
+ * directory the user did not ask to remove.
+ */
+/* Did repair() actually produce the files it is responsible for?  Reporting
+ * REPAIR: PASS because the function returned void would be reporting that it
+ * was CALLED, which is not the same claim. */
+static int access_ok_all(const char *R)
+{
+    static const char *req[] = {
+        "/etc/resolv.conf", "/etc/hosts",
+        "/etc/apt/apt.conf.d/99-alr-no-sandbox",
+        "/etc/dpkg/dpkg.cfg.d/99-alr",
+        "/usr/sbin/ldconfig",
+        "/etc/passwd", "/etc/group",
+        NULL
+    };
+    char p[ALR_PBUF];
+    int i;
+    for (i = 0; req[i]; i++) {
+        snprintf(p, sizeof p, "%s%s", R, req[i]);
+        if (access(p, F_OK) != 0) return 0;
+    }
+    return 1;
+}
+
+struct install_report {
+    int  fetched;          /* 1 downloaded, 0 served from cache */
+    int  sha;              /* 1 verified, 0 mismatch, -1 no digest to check */
+    long members, special, setuid;
+    int  repaired;
+};
+
+/* First line of a command's output, newline-stripped.  "" on failure. */
+static void read_line_cmd(const char *cmd, char *out, size_t sz)
+{
+    FILE *fp = popen(cmd, "r");
+    size_t n;
+    out[0] = '\0';
+    if (!fp) return;
+    if (fgets(out, (int)sz, fp)) {
+        n = strlen(out);
+        while (n && (out[n-1] == '\n' || out[n-1] == '\r')) out[--n] = '\0';
+    }
+    pclose(fp);
+}
+
+static long read_long_cmd(const char *cmd, long dflt)
+{
+    char b[64];
+    read_line_cmd(cmd, b, sizeof b);
+    return *b ? strtol(b, NULL, 10) : dflt;
+}
+
+static long now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+
+/* One report line, and a running failure count. */
+static void rline(int *bad, const char *name, int ok, const char *fmt, ...)
+{
+    va_list ap;
+    printf("%-24s %s", name, ok ? "PASS" : "FAIL");
+    if (fmt && *fmt) {
+        printf("  ");
+        va_start(ap, fmt);
+        vprintf(fmt, ap);
+        va_end(ap);
+    }
+    putchar('\n');
+    if (!ok) (*bad)++;
+}
+
+static int install_verify(const char *distro, const char *R,
+                          const struct install_report *rep)
+{
+    char cmd[ALR_PBUF * 2], line[ALR_PBUF], ld[ALR_PBUF];
+    int bad = 0;
+    long t0, ms;
+
+    printf("\n");
+    rline(&bad, "INSTALL DOWNLOAD:", 1, "%s",
+          rep->fetched ? "fetched" : "cache hit");
+    /* An unverified download is not a pass.  ubuntu-base is fetched over
+     * HTTPS, but the fallback path when SHA256SUMS is unreachable has no
+     * digest at all, and the report must not launder that into PASS. */
+    if (rep->sha < 0)
+        printf("%-24s %s  %s\n", "INSTALL VERIFY SHA256:", "SKIP",
+               "no digest available (--url, or SHA256SUMS unreachable)");
+    else
+        rline(&bad, "INSTALL VERIFY SHA256:", rep->sha, "");
+    rline(&bad, "INSTALL EXTRACT:", rep->members > 0,
+          "files=%ld skipped_special=%ld setuid_masked=%ld",
+          rep->members, rep->special, rep->setuid);
+    rline(&bad, "INSTALL REPAIR:", rep->repaired, "");
+
+    snprintf(ld, sizeof ld, "%s/lib/ld-linux-aarch64.so.1", R);
+    rline(&bad, "INSTALL LDSO PRESENT:", access(ld, X_OK) == 0, "%s", ld);
+
+    /* ADR 0002: we invoke the loader explicitly, so these four options are
+     * load-bearing.  --argv0 arrived in glibc 2.33; without it argv[0] leaks
+     * the host path and multicall binaries (busybox, uutils) misbehave. */
+    {
+        int argv0, preload, libpath, inhibit;
+        snprintf(cmd, sizeof cmd, "'%s' --help 2>&1", ld);
+        {
+            FILE *fp = popen(cmd, "r");
+            argv0 = preload = libpath = inhibit = 0;
+            if (fp) {
+                while (fgets(line, sizeof line, fp)) {
+                    if (strstr(line, "--argv0"))         argv0   = 1;
+                    if (strstr(line, "--preload"))       preload = 1;
+                    if (strstr(line, "--library-path"))  libpath = 1;
+                    if (strstr(line, "--inhibit-cache")) inhibit = 1;
+                }
+                pclose(fp);
+            }
+        }
+        rline(&bad, "INSTALL LDSO OPTIONS:",
+              argv0 && preload && libpath && inhibit,
+              "argv0=%s preload=%s library-path=%s inhibit-cache=%s",
+              argv0 ? "yes" : "NO", preload ? "yes" : "NO",
+              libpath ? "yes" : "NO", inhibit ? "yes" : "NO");
+        if (!argv0)
+            fprintf(stderr, "alr: WARNING this loader has no --argv0 "
+                            "(glibc < 2.33); argv0_leaks=true "
+                            "(docs/01-platform-facts.md §C2)\n");
+    }
+
+    /* The actual boot.  Goes through `alr run` -- the same path a user takes,
+     * preload and supervisor included -- because a check that bypassed them
+     * would pass on a rootfs nobody can actually use. */
+    snprintf(cmd, sizeof cmd,
+             "ALR_ROOT_DIR='%s' '%s' -d '%s' run /bin/true >/dev/null 2>&1; echo $?",
+             getenv("ALR_ROOT_DIR") ? getenv("ALR_ROOT_DIR") : "", g_self, distro);
+    t0 = now_ms();
+    {
+        long code = read_long_cmd(cmd, -1);
+        ms = now_ms() - t0;
+        rline(&bad, "INSTALL BOOT /bin/true:", code == 0,
+              "exit=%ld elapsed_ms=%ld", code, ms);
+    }
+
+    snprintf(cmd, sizeof cmd,
+             "ALR_ROOT_DIR='%s' '%s' -d '%s' run /bin/echo alr 2>/dev/null",
+             getenv("ALR_ROOT_DIR") ? getenv("ALR_ROOT_DIR") : "", g_self, distro);
+    read_line_cmd(cmd, line, sizeof line);
+    rline(&bad, "INSTALL BOOT /bin/echo:", strcmp(line, "alr") == 0,
+          "stdout=\"%s\"", line);
+
+    /* Not a pass/fail -- a recorded fact.  The guest's glibc version decides
+     * which wrapper names exist (the __xstat family vanished in 2.33) and it
+     * belongs in any bug report about this rootfs. */
+    snprintf(cmd, sizeof cmd,
+             "'%s' --version 2>&1 | sed -n '1s/.*version \\([0-9][0-9.]*[0-9]\\).*/\\1/p'", ld);
+    read_line_cmd(cmd, line, sizeof line);
+    printf("%-24s %s\n", "INSTALL GLIBC VERSION:", *line ? line : "(unknown)");
+
+    return bad;
+}
+
 static int cmd_install(const char *distro, const char *url_override)
 {
     char R[ALR_PBUF], part[ALR_PBUF], tarball[ALR_PBUF], cache[ALR_PBUF];
     char durl[512], dsha[80];
     char *dl[8], *ex[12], *mk[4];
     const char *url = url_override;
+    struct install_report rep;
     int rc;
 
+    memset(&rep, 0, sizeof rep);
+    rep.sha = -1;                       /* nothing to check against, until there is */
     durl[0] = dsha[0] = '\0';
     distro_root(R, sizeof R, distro);
     snprintf(part,  sizeof part,  "%s.part", R);
@@ -1142,9 +1334,13 @@ static int cmd_install(const char *distro, const char *url_override)
                 dl[3] = (char *)"3"; dl[4] = (char *)"-o"; dl[5] = tarball;
                 dl[6] = (char *)url; dl[7] = NULL;
                 if (run_cmd(dl) != 0) die("download-network", "download failed");
+                rep.fetched = 1;
             }
             if (!*dsha) break;                     /* --url: nothing to check against */
-            if (verify_sha256(tarball, dsha) == 0) { printf("alr: sha256 ok\n"); break; }
+            if (verify_sha256(tarball, dsha) == 0) {
+                printf("alr: sha256 ok\n"); rep.sha = 1; break;
+            }
+            rep.sha = 0;
             /* A cached tarball from an older point release is the common case,
              * so retry once with a fresh download before calling it corrupt. */
             fprintf(stderr, "alr: cached tarball does not match SHA256SUMS; refetching\n");
@@ -1182,7 +1378,7 @@ static int cmd_install(const char *distro, const char *url_override)
     if (rc != 0) fprintf(stderr, "alr: tar exited %d (continuing; some members "
                                  "are expected to be skipped)\n", rc);
 
-    if (fix_hardlinks(tarball, part) < 0)
+    if (fix_hardlinks(tarball, part, &rep.members, &rep.special) < 0)
         fprintf(stderr, "alr: hardlink fixup incomplete\n");
 
     {   int fixed = 0, failed = 0;
@@ -1193,9 +1389,14 @@ static int cmd_install(const char *distro, const char *url_override)
     }
 
     {   /* setuid/setgid bits are inert on /data (nosuid) and only produce
-         * confusing warnings later -- mask them off. */
+         * confusing warnings later -- mask them off.  Counted first: the
+         * install report states how many were masked, and "0" from a find that
+         * matched nothing looks the same as "0" from a find that failed. */
         char cmdbuf[ALR_PBUF * 2];
         char *sh[4];
+        snprintf(cmdbuf, sizeof cmdbuf,
+                 "find '%s' -type f -perm /6000 2>/dev/null | wc -l", part);
+        rep.setuid = read_long_cmd(cmdbuf, -1);
         snprintf(cmdbuf, sizeof cmdbuf,
                  "find '%s' -type f -perm /6000 -exec chmod a-s {} + 2>/dev/null; exit 0",
                  part);
@@ -1204,6 +1405,7 @@ static int cmd_install(const char *distro, const char *url_override)
     }
 
     repair(part);
+    rep.repaired = access_ok_all(part);
     /* NOT ignorable.  This used to discard the return value, so a rootfs with
      * NO path virtualization was reported as a successful install: the warning
      * scrolled past, cmd_install returned 0, and `alr run` then booted it
@@ -1226,6 +1428,11 @@ static int cmd_install(const char *distro, const char *url_override)
     printf("alr: installed %s\n", R);
 
     divert_ldconfig(distro, R);
+
+    if (install_verify(distro, R, &rep) != 0)
+        die("rootfs-unbootable",
+            "the rootfs extracted but does not boot; it was LEFT IN PLACE for "
+            "inspection (docs/05-provisioning-spec.md §4)");
 
     if (g_with && *g_with) {
         /* apt must run before the HTTPS fetches: ubuntu-base ships no
@@ -1874,15 +2081,29 @@ int main(int argc, char **argv)
     if (i >= argc) usage();
 
     if (!strcmp(argv[i], "install")) {
-        const char *d = (i + 1 < argc) ? argv[i + 1] : distro;
+        /* Options and the positional in any order, and an unknown option is an
+         * ERROR.  The old loop scanned for the three it knew and took
+         * argv[i+1] as the distro whatever it was, so
+         *     alr install -d ubuntu-24.04 --url ...
+         * -- putting the global -d after the subcommand, which every other
+         * subcommand accepts -- INSTALLED A ROOTFS NAMED "-d", reported
+         * success, and printed a nine-line verification report about it.
+         * Nothing rejected it: `-d` is a legal name under distro_name_ok().
+         * Same treatment doctor already gives unknown options. */
+        const char *d = NULL;
         int j;
         for (j = i + 1; j < argc; j++) {
-            if (!strcmp(argv[j], "--url")  && j + 1 < argc) url = argv[j + 1];
-            if (!strcmp(argv[j], "--with") && j + 1 < argc) g_with = argv[j + 1];
-            if (!strcmp(argv[j], "--force")) g_force = 1;
+            if (!strcmp(argv[j], "-d") && j + 1 < argc)     d = argv[++j];
+            else if (!strcmp(argv[j], "--url")  && j + 1 < argc) url = argv[++j];
+            else if (!strcmp(argv[j], "--with") && j + 1 < argc) g_with = argv[++j];
+            else if (!strcmp(argv[j], "--force")) g_force = 1;
+            else if (argv[j][0] == '-' && argv[j][1] != '\0')
+                die("install-unknown-option", "unknown option for `alr install`");
+            else if (!d) d = argv[j];
+            else die("install-unknown-option",
+                     "more than one distro named for `alr install`");
         }
-        if (!strncmp(d, "--", 2)) d = distro;
-        return cmd_install(d, url);
+        return cmd_install(d ? d : distro, url);
     }
     if (!strcmp(argv[i], "run") || !strcmp(argv[i], "exec")) {
         /* `exec` is `run` with -- ending option parsing unambiguously (§1). */

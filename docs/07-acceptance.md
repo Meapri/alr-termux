@@ -83,6 +83,28 @@ ALR BOOT /bin/bash -c true:       PASS
 ALR GUEST GLIBC VERSION:          2.39
 ALR SUPERVISOR SIGSYS COUNT:      sigsys=22 / pids=21  (기록만. 프로세스당 ≈1)  MEASURED
 ```
+
+**설치 경로** — [`tests/device/install_gate.sh`](../tests/device/install_gate.sh), acceptance 와 별개로 돈다(전체 추출 비용이 든다).
+```
+INSTALL EXIT:                     PASS
+INSTALL REPORT NINE LINES:        PASS   ← docs/05 §4 의 9줄이 이름으로 전부 있는지
+INSTALL REPORT LDSO OPTIONS:      PASS   argv0/preload/library-path/inhibit-cache
+INSTALL REPORT BOOT ECHO:         PASS   stdout="alr"
+INSTALL REPORT UNVERIFIED IS SKIP: PASS  ← 다이제스트 없는 다운로드는 PASS 가 아니다
+INSTALL HARDLINK uncompress:      PASS
+INSTALL HARDLINK perl5.38.2:      PASS
+INSTALL PRELOAD PRESENT:          PASS
+INSTALL LDSO PRESENT:             PASS
+INSTALL BOOT:                     PASS
+INSTALL VIRTUALIZED:              PASS   PRETTY_NAME="Ubuntu 24.04.4 LTS"
+INSTALL REJECTS TRUNCATED:        PASS   rc=125
+INSTALL REJECTS UNBOOTABLE:       PASS   rc=125, rootfs 를 지우지 않고 남김
+INSTALL DASH D IS A FLAG:         PASS
+INSTALL REFUSES UNKNOWN OPTION:   PASS
+INSTALL WARNS ON MISSING PRELOAD: PASS
+```
+> **`INSTALL REJECTS UNBOOTABLE` 이 없으면 `INSTALL BOOT /bin/true: PASS` 는 한 번도 다른 말을 한 적이 없는 줄이다.** 잘린 tarball 은 `verify_rootfs` 에서 리포트 **이전에** 죽으므로 부팅 검사에 대해 아무것도 증명하지 못한다. 그래서 게이트는 `verify_rootfs` 가 찾는 네 파일만 정확히 담고 **아무것도 동작하지 않는** tarball 을 만든다 — `/bin/sh` 의 내용이 문자열 `not an elf` 다. 추출도 성공하고 파일 검사도 성공하니, 잡을 수 있는 것은 실제로 돌려 보는 것뿐이다.
+
 > **M3이 이 프로젝트의 진짜 첫 증명이다.** 여기가 통과하면 `set_robust_list` 문제가 실제로 풀린 것이다.
 >
 > SIGSYS 수는 [M7/M8](evidence/2026-08-02-m7-m8-workloads-perf.md)에서 실측됐다. 소프트 게이트

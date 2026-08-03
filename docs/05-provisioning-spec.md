@@ -129,13 +129,23 @@ rootfs 안의 모든 파일이 디스크상으로는 Termux uid 소유인데 이
 
 ## 4. 첫 부팅 검증
 
-> ✅ **구현됨 (부분) — 2026-08-03.** `alr install` 은 이제 `rename` **전에** 필수 파일을 확인하고, 없으면 `reason=rootfs-incomplete` 로 죽는다. 확인 대상: `lib/ld-linux-aarch64.so.1`, `bin/sh`, `usr/bin/env`, `etc/os-release`.
+> ✅ **구현됨 — 2026-08-04.** `alr install` 은 `rename` **전에** 필수 파일을 확인하고(없으면 `reason=rootfs-incomplete`), `rename` **후에** 아래 9줄을 출력한다. 확인 대상: `lib/ld-linux-aarch64.so.1`, `bin/sh`, `usr/bin/env`, `etc/os-release`.
 >
 > **왜 tar 의 종료 코드로는 안 되는가**: 정상 추출도 0이 아니다 — 하드링크 멤버가 Android SELinux 정책에 막히는 것이 예상된 동작이라 코드가 예전부터 무시해 왔다. **왜 목록 대조로도 안 되는가**: 잘린 아카이브는 **목록도 짧아서** 목록과 디스크가 완벽히 일치한다. 갈라지는 지점은 필수 파일의 존재 여부뿐이다.
 >
 > 근거: [`tests/device/install_gate.sh`](../tests/device/install_gate.sh) 가 2 MB 로 자른 tarball 로 설치를 시도한다. 이 검사가 붙기 전 그 설치는 **성공을 보고했다.**
 >
-> **아직 아닌 것**: 아래 §4 가 적은 9줄 리포트(`INSTALL DOWNLOAD/VERIFY/...`)는 출력되지 않는다. 설치 경로의 커버리지는 `install_gate.sh` 가 들고 있다.
+> **왜 파일 존재 확인만으로는 부족한가**: rootfs 는 완벽히 풀리고도 **돌지 않을 수 있다** — 아키텍처가 다른 로더, [ADR 0002](adr/0002-explicit-ldso-invocation.md) 가 요구하는 옵션이 없는 낡은 로더, 로드에 실패하는 preload. 셋 다 사용자의 첫 명령이 엉뚱해 보이는 이유로 실패하기 직전까지 **깨끗한 설치처럼 보인다.** 그래서 install 의 마지막 동작은 방금 만든 것을 **실제로 부팅해 보는 것**이다. 부팅 검사는 `alr run` 을 통과한다 — preload 와 슈퍼바이저를 포함해 사용자와 **같은 경로**다. 우회하는 검사는 아무도 못 쓰는 rootfs 에서도 통과한다.
+>
+> 실패해도 rootfs 를 **지우지 않는다**(`reason=rootfs-unbootable`). 이 시점은 `rename` 이후라, 지운다면 그것이 사용자가 요청하지 않은 디렉토리를 삭제하는 유일한 코드 경로가 된다.
+>
+> `INSTALL VERIFY SHA256` 는 검증할 다이제스트가 없으면 `PASS` 가 아니라 **`SKIP`** 이다(`--url`, 또는 SHA256SUMS 도달 불가). 검증되지 않은 다운로드를 `PASS` 로 세탁하지 않는다.
+>
+> `INSTALL GLIBC VERSION` 은 합격/불합격이 아니라 **기록된 사실**이다. 게스트 glibc 버전이 어떤 래퍼 이름이 존재하는지를 결정하고(`__xstat` 계열은 2.33 에서 사라졌다) 이 rootfs 에 대한 모든 버그 리포트에 들어가야 한다.
+>
+> `MEASURED` 2026-08-04, SM-X236N: `files=3413 skipped_special=0 setuid_masked=0`, `argv0=yes preload=yes library-path=yes inhibit-cache=yes`, `/bin/true exit=0 elapsed_ms=32`, glibc `2.39`.
+>
+> **이 리포트를 만들다 CLI 버그가 나왔다**: `alr install -d ubuntu-24.04` 는 — 다른 모든 서브커맨드가 받는 형태인데 — **`-d` 라는 이름의 rootfs 를 설치하고** 성공을 보고한 뒤 그것에 대한 9줄 리포트를 출력했다. 옵션 스캔이 자기가 아는 세 개만 찾고 `argv[i+1]` 을 무조건 distro 로 잡았으며, `-d` 는 `distro_name_ok()` 에서 합법이었다. 이제 install 도 옵션을 순서 무관하게 파싱하고 모르는 옵션은 `reason=install-unknown-option` 으로 거부하며, `-` 로 시작하는 distro 이름은 어떻게 들어왔든 거부한다.
 
 `alr install`은 끝나기 전에 다음을 순서대로 수행하고, 실패 시 rootfs를 남기되 명확히 보고한다.
 
@@ -249,11 +259,12 @@ already-installed          bad-distro-name            bad-env
 bad-option                 bad-workdir                boot-enoent
 boot-failed                doctor-missing             doctor-unknown-option
 download-corrupt           download-network           env-reserved
-extract-permission         ldso-missing               no-supervisor-requested
-not-a-rootfs               preload-install-failed     preload-missing-in-rootfs
-preload-stale              remove-failed              rootfs-incomplete
-rootfs-missing             too-many-env               unhooked-static-binary
-unsupported-distro         workdir-enoent
+extract-permission         install-unknown-option     ldso-missing
+no-supervisor-requested    not-a-rootfs               preload-install-failed
+preload-missing-in-rootfs  preload-stale              remove-failed
+rootfs-incomplete          rootfs-missing             rootfs-unbootable
+too-many-env               unhooked-static-binary     unsupported-distro
+workdir-enoent
 ```
 
 > ⚠️ **이 목록은 2026-08-03 에 실측으로 다시 썼다.** 이전 판은 17개를 적어 두었는데 코드가 방출하는 것은 22개였고 **겹치는 것이 5개뿐**이었다(`download-network` `extract-permission` `ldso-missing` `boot-failed` `boot-enoent`). 목표 [G6](00-product.md) 은 "모든 실패가 안정적 `reason=` 코드로 분류된다" 이고 그 측정 수단이 이 어휘인데, **어느 쪽도 지키지 않는 어휘는 G6 을 참으로도 거짓으로도 만들 수 없다.** 그래서 G6 은 목표가 아니라 문장이었다.
