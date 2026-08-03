@@ -320,6 +320,48 @@ if [ -r "$R/usr/include/stdio.h" ]; then
 else
     emit "PRELOAD UNIX SOCKET PATH" SKIP "no libc6-dev in the guest"
 fi
+
+# The rest of the path-taking surface, found by scripts/check-path-coverage.sh
+# after bind()/connect() showed that "the calls we thought of" is not coverage.
+# Seven checks, six positive and one negative:
+#   xattr        `ls -l` printed "drwx------?" -- coreutils prints '?' when the
+#                ACL probe ERRORS, and getxattr on an unrewritten path is a
+#                bare ENOENT.  Under cp -a, tar --xattrs, rsync -X, getfacl.
+#   inotify      every file watcher: node's fs.watch/chokidar and so every JS
+#                dev server, inotifywait, entr.  Silently never fires.
+#   pathconf     configure scripts; glibc's own readdir sizing.
+#   getsockname  the OUT side of the bind fix -- the kernel hands back the
+#                rewritten sun_path, so the guest learned the ANDROID address.
+#   nftw         glibc walks with internal opendir/lstat that bypass the PLT.
+#                The probe checks the CALLBACK's path and FTW.base, not just
+#                that the walk succeeded.  (coreutils is unaffected: du, rm -r
+#                and find carry gnulib's fts, which does go through the PLT.)
+#   setmntent    regression guard; it is interposed because glibc's copy calls
+#                fopen through an internal alias.
+#   glob-guest   the NEGATIVE control.  glob() must return GUEST paths; a
+#                "be thorough" pass that stopped rewriting the results would
+#                break every caller, and this catches that.
+if [ -r "$R/usr/include/stdio.h" ]; then
+    cp tests/device/probe_pathcov.c "$R/tmp/probe_pathcov.c" 2>/dev/null
+    if $ALR run /usr/bin/gcc -O1 -o /tmp/probe_pathcov /tmp/probe_pathcov.c >/dev/null 2>&1; then
+        ck "PRELOAD PATH COVERAGE" \
+           "xattr=ok inotify=ok pathconf=ok getsockname=ok nftw=ok setmntent=ok glob-guest=ok" \
+           $ALR run /tmp/probe_pathcov
+    else
+        emit "PRELOAD PATH COVERAGE" SKIP "probe did not compile"
+    fi
+else
+    emit "PRELOAD PATH COVERAGE" SKIP "no libc6-dev in the guest"
+fi
+
+# The Termux uid has no entry in the guest's user databases, so every ownership
+# display degrades to a raw number -- MEASURED before the fix: `ls -ld /root`
+# printed "6 10297 10297" and `whoami` said "cannot find name for user ID
+# 10297".  docs/05 §3.2.  True in BOTH fakeroot modes: fakeroot lies about the
+# process credentials, not about st_uid.
+ck "CLI GUEST USERDB" "alr" $ALR run /usr/bin/whoami
+ckc "CLI GUEST USERDB LS" " alr alr " $ALR run /bin/sh -c \
+    'ls -ld /root | tr -s " "'
 # tmux is the workload that exposed it.  A detached session that outlives the
 # check, so `tmux ls` is answered by a live server rather than a race.
 # Server and query in ONE `alr run`: the supervisor sets PTRACE_O_EXITKILL, so

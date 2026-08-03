@@ -158,6 +158,8 @@ check: test
 	@bash scripts/check-docs.sh
 	@bash scripts/check-reasons.sh
 	@bash scripts/check-invariants.sh
+	@bash scripts/check-acceptance-names.sh
+	@bash scripts/check-path-coverage.sh
 	@bench/regression_gate.py --self-test
 
 # --- release layout --------------------------------------------------------

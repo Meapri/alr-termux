@@ -145,6 +145,76 @@ static int write_shim(const char *R)
     return chmod(path, 0755);
 }
 
+/* docs/05-provisioning-spec.md §3.2: add the Termux uid/gid to the guest's
+ * user databases -- "게스트의 `ls -l`, `getpwuid()`가 해석되게".
+ *
+ * MEASURED 2026-08-03 before this existed:
+ *     $ alr run ls -ld /root
+ *     drwx------ 6 10297 10297 3452 Aug  3 10:25 /root
+ *     $ alr run --no-fakeroot whoami
+ *     whoami: cannot find name for user ID 10297
+ * Every file in the rootfs is owned by the Termux uid on disk, and no entry in
+ * the image describes it, so every ownership display in the guest degrades to
+ * a bare number and getpwuid() returns NULL.  Note this is true in BOTH
+ * fakeroot modes: fakeroot lies about the PROCESS credentials (getuid), not
+ * about st_uid, which is deliberate (§2694 of the preload) and unaffected here.
+ *
+ * APPEND, never overwrite -- the spec is explicit, and for good reason: the
+ * image's root/daemon/nobody entries and every uid apt creates for a package
+ * live in these files.  Truncating them would break far more than it fixed.
+ *
+ * REWRITTEN rather than appended-if-absent, because the uid is not immutable:
+ * restoring a Termux backup onto a fresh install keeps the data directory and
+ * gets a NEW uid, at which point a leftover line maps a uid that no longer
+ * exists.  Dropping our own line and re-adding it makes the operation
+ * idempotent and self-healing, which is why `alr update-components` runs it
+ * too. */
+static int rewrite_userdb(const char *R, const char *rel, const char *line)
+{
+    char path[ALR_PBUF], tmp[ALR_PBUF], buf[1024];
+    FILE *in, *out;
+    /* Track line starts properly: fgets returns a PARTIAL line for anything
+     * over the buffer, and treating each chunk as a line would let a long
+     * entry beginning "alr:" mid-stream drop the wrong bytes. */
+    int at_bol = 1, drop = 0, ended_nl = 1;
+
+    snprintf(path, sizeof path, "%s%s", R, rel);
+    snprintf(tmp, sizeof tmp, "%s.alr-tmp", path);
+    if (!(out = fopen(tmp, "w"))) return -1;
+    if ((in = fopen(path, "r"))) {
+        while (fgets(buf, sizeof buf, in)) {
+            if (at_bol) drop = !strncmp(buf, "alr:", 4);
+            at_bol = strchr(buf, '\n') != NULL;
+            if (!drop) { fputs(buf, out); ended_nl = at_bol; }
+        }
+        fclose(in);
+    }
+    /* A stock file ends in a newline, but a hand-edited one may not, and
+     * gluing our entry onto the tail of theirs would corrupt both. */
+    if (!ended_nl) fputc('\n', out);
+    fputs(line, out);
+    if (fclose(out) != 0) { unlink(tmp); return -1; }
+    if (rename(tmp, path) != 0) { unlink(tmp); return -1; }
+    return 0;
+}
+
+static void sync_userdb(const char *R)
+{
+    char pw[256], gr[128];
+
+    snprintf(pw, sizeof pw, "alr:x:%lu:%lu:alr:/root:/bin/bash\n",
+             (unsigned long)getuid(), (unsigned long)getgid());
+    /* Four fields, not seven.  A group entry is name:passwd:gid:members --
+     * docs/05 §3.2 showed the passwd line for both files, which would have put
+     * a malformed record in front of every getgrgid() in the guest. */
+    snprintf(gr, sizeof gr, "alr:x:%lu:\n", (unsigned long)getgid());
+
+    if (rewrite_userdb(R, "/etc/passwd", pw) != 0 ||
+        rewrite_userdb(R, "/etc/group", gr) != 0)
+        fprintf(stderr, "alr: could not add the Termux uid to the guest user "
+                        "databases; ownership will display as raw numbers\n");
+}
+
 /* Files that ship as ZERO BYTES in ubuntu-base and must be written, plus the
  * two config files that make apt survive a non-root, seccomp-restricted host.
  * Everything else in /etc is already correct -- notably ubuntu.sources, which
@@ -179,6 +249,7 @@ static void repair(const char *R)
         fclose(fp);
     }
     write_shim(R);
+    sync_userdb(R);
     {   /* directories the tarball ships empty or not at all.
          * The apt ones matter: apt does not create them and fails with a bare
          * ENOENT from mkstemp/statvfs if they are missing. */
@@ -844,6 +915,12 @@ static int cmd_update_components(const char *distro)
 
     if (install_preload(R) != 0)
         die("preload-install-failed", "could not refresh the guest preload");
+
+    /* Also re-sync the uid lines.  This is the command for "refresh what alr
+     * owns inside an existing rootfs", and the uid is exactly the thing that
+     * can go stale under a rootfs that outlives the app install it was made
+     * under. */
+    sync_userdb(R);
 
     file_sha256(gp, after, sizeof after);
     if (*before && *after && !strcmp(before, after))

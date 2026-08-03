@@ -29,6 +29,10 @@
 #include <fcntl.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <ftw.h>
+#include <glob.h>
+#include <sys/inotify.h>
+#include <sys/xattr.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -186,6 +190,19 @@ DECL(int,    renameat2,  int, const char *, int, const char *, unsigned int);
 DECL(int,    chdir,      const char *);
 DECL(char *, getcwd,     char *, size_t);
 DECL(char *, realpath,   const char *, char *);
+DECL(ssize_t, getxattr,     const char *, const char *, void *, size_t);
+DECL(ssize_t, lgetxattr,    const char *, const char *, void *, size_t);
+DECL(int,     setxattr,     const char *, const char *, const void *, size_t, int);
+DECL(int,     lsetxattr,    const char *, const char *, const void *, size_t, int);
+DECL(ssize_t, listxattr,    const char *, char *, size_t);
+DECL(ssize_t, llistxattr,   const char *, char *, size_t);
+DECL(int,     removexattr,  const char *, const char *);
+DECL(int,     lremovexattr, const char *, const char *);
+DECL(int,     inotify_add_watch, int, const char *, uint32_t);
+DECL(long,    pathconf,     const char *, int);
+DECL(int,     glob,         const char *, int, int (*)(const char *, int), glob_t *);
+DECL(int,     ftw,          const char *, int (*)(const char *, const struct stat *, int), int);
+DECL(int,     nftw,         const char *, int (*)(const char *, const struct stat *, int, struct FTW *), int, int);
 DECL(int,    chmod,      const char *, mode_t);
 DECL(int,    fchmodat,   int, const char *, mode_t, int);
 DECL(int,    chown,      const char *, uid_t, gid_t);
@@ -296,6 +313,10 @@ static void alr_init(void)
     BIND(readlink); BIND(readlinkat); BIND(opendir);
     BIND(mkdir); BIND(mkdirat); BIND(rmdir); BIND(unlink); BIND(unlinkat);
     BIND(rename); BIND(renameat); BIND(renameat2); BIND(chdir); BIND(getcwd); BIND(realpath);
+    BIND(getxattr); BIND(lgetxattr); BIND(setxattr); BIND(lsetxattr);
+    BIND(listxattr); BIND(llistxattr); BIND(removexattr); BIND(lremovexattr);
+    BIND(inotify_add_watch); BIND(pathconf); BIND(glob);
+    BIND(ftw); BIND(nftw);
     BIND(chmod); BIND(fchmodat); BIND(chown); BIND(lchown); BIND(fchownat);
     BIND(utimensat); BIND(symlink); BIND(symlinkat); BIND(link); BIND(linkat);
     BIND(execve); BIND(execvp); BIND(syscall);
@@ -843,6 +864,219 @@ int remove(const char *path)
 { struct stat st; P(path); NEED(lstat); NEED(unlink); NEED(rmdir);
   if (real_lstat(_p, &st) == 0 && S_ISDIR(st.st_mode)) return real_rmdir(_p);
   return real_unlink(_p); }
+
+/* ── the rest of the path-taking surface ─────────────────────────────────
+ *
+ * Everything below was missing until 2026-08-03 and was found by
+ * scripts/check-path-coverage.sh, which diffs an inventory of path-taking libc
+ * entry points against what this file exports.  The gate exists because
+ * bind()/connect() had been missing for the life of the project (docs/01 §A6)
+ * and nothing would ever have pointed at them; "we interposed the ones we
+ * thought of" is not a coverage argument.
+ *
+ * MEASURED before, by tests/device/probe_pathcov.c, all against paths that do
+ * not exist on Android:
+ *     xattr=FAILED inotify=FAILED pathconf=FAILED getsockname=FAILED
+ *
+ * xattr:    `ls -l` printed "drwx------?" in the guest.  coreutils prints '?'
+ *           when the ACL probe ERRORS rather than when there is no ACL, and
+ *           getxattr on an unrewritten path is a bare ENOENT.  The same calls
+ *           sit under cp -a, tar --xattrs, rsync -X, getfacl and install -Z.
+ * inotify:  every file watcher -- node's fs.watch and chokidar (so every JS
+ *           dev server), inotifywait, entr, watchman.  Watching the wrong path
+ *           does not error; it silently never fires, which is worse.
+ * pathconf: configure scripts, and glibc's own readdir buffer sizing. */
+ssize_t getxattr(const char *path, const char *n, void *v, size_t s)
+{ P(path); NEED(getxattr); return real_getxattr(_p, n, v, s); }
+ssize_t lgetxattr(const char *path, const char *n, void *v, size_t s)
+{ P(path); NEED(lgetxattr); return real_lgetxattr(_p, n, v, s); }
+int setxattr(const char *path, const char *n, const void *v, size_t s, int f)
+{ P(path); NEED(setxattr); return real_setxattr(_p, n, v, s, f); }
+int lsetxattr(const char *path, const char *n, const void *v, size_t s, int f)
+{ P(path); NEED(lsetxattr); return real_lsetxattr(_p, n, v, s, f); }
+ssize_t listxattr(const char *path, char *l, size_t s)
+{ P(path); NEED(listxattr); return real_listxattr(_p, l, s); }
+ssize_t llistxattr(const char *path, char *l, size_t s)
+{ P(path); NEED(llistxattr); return real_llistxattr(_p, l, s); }
+int removexattr(const char *path, const char *n)
+{ P(path); NEED(removexattr); return real_removexattr(_p, n); }
+int lremovexattr(const char *path, const char *n)
+{ P(path); NEED(lremovexattr); return real_lremovexattr(_p, n); }
+
+/* glob(3) is the one entry point here that has to be corrected on BOTH sides.
+ *
+ * MEASURED 2026-08-03: glob("/etc/os-relea*") returned GLOB_NOMATCH in the
+ * guest.  Not because the pattern is exotic -- because glibc walks it with its
+ * OWN internal opendir/lstat, called directly rather than through the PLT, so
+ * LD_PRELOAD never sees them.  It searched Android's /etc.  This is the one
+ * structural hole in the interposer model, and the fix is always the same:
+ * catch the public entry point, since that one IS a PLT call.
+ *
+ * Rewriting the pattern alone is not enough.  glob() composes each result from
+ * the literal prefix of the pattern plus the directory entry, so rewriting the
+ * pattern makes it return <R>-prefixed paths -- correct matches at addresses
+ * the guest cannot name.  Every result therefore goes back through
+ * alr_guest_canon, which also covers GLOB_NOCHECK (returns the pattern itself
+ * when nothing matched) and GLOB_APPEND (already-guest entries are left alone,
+ * so re-running over them is idempotent).
+ *
+ * GLOB_ALTDIRFUNC is passed through untouched: the caller supplied its own
+ * opendir/lstat, so the paths glibc builds go to THEIR code, not the kernel,
+ * and rewriting would hand them a host path they never asked for.
+ *
+ * KNOWN LIMIT: GLOB_TILDE.  glibc expands `~` internally after we have already
+ * rewritten, then walks the expansion with the same internal calls.  A
+ * `~/...` pattern therefore still resolves against Android.  Not worth chasing
+ * -- the shells that use tilde expansion expand it themselves before calling. */
+static void glob_unrewrite(glob_t *g, int flags)
+{
+    char **v, b[ALR_PBUF];
+    size_t skip = (flags & GLOB_DOOFFS) ? g->gl_offs : 0;
+
+    if (!g->gl_pathv) return;
+    for (v = g->gl_pathv + skip; *v; v++) {
+        const char *c = alr_guest_canon(*v, g_root, g_root_len, b, sizeof b);
+        /* guest_canon only strips the prefix, so this never grows the string
+         * and the allocation globfree() will free is unchanged. */
+        if (c != *v) memmove(*v, c, strlen(c) + 1);
+    }
+}
+
+int glob(const char *pat, int flags, int (*errfunc)(const char *, int),
+         glob_t *pg)
+{
+    char b[ALR_PBUF];
+    const char *p;
+    int r;
+
+    ensure_init();
+    if (!real_glob) { errno = ENOSYS; return GLOB_ABORTED; }
+    if (flags & GLOB_ALTDIRFUNC) return real_glob(pat, flags, errfunc, pg);
+    p = rw(pat, b, sizeof b);
+    if (!p && pat) { errno = ENAMETOOLONG; return GLOB_ABORTED; }
+    r = real_glob(p, flags, errfunc, pg);
+    /* Only on success: on GLOB_NOMATCH without GLOB_APPEND glibc does not
+     * promise gl_pathv is initialised, and walking it would be a read of
+     * whatever the caller's stack held. */
+    if (r == 0) glob_unrewrite(pg, flags);
+    return r;
+}
+
+/* Same function on LP64 -- glob64_t and glob_t are layout-identical and glibc
+ * itself makes one a strong alias of the other.  Defined so a guest binary
+ * that imports glob64@GLIBC_2.17 (anything built with _FILE_OFFSET_BITS=64,
+ * which is most of Ubuntu) does not slip past to libc's copy. */
+int glob64(const char *pat, int flags, int (*errfunc)(const char *, int),
+           glob64_t *pg)
+{ return glob(pat, flags, errfunc, (glob_t *)pg); }
+
+/* ftw/nftw are glob's problem again -- glibc walks with its own internal
+ * opendir/lstat -- with one extra twist: the CALLBACK is handed each path, so
+ * rewriting the root without correcting the callback argument would hand the
+ * guest a stream of <R>-prefixed paths.
+ *
+ * MEASURED 2026-08-03: nftw("/usr/lib/os-release", ...) returned -1 in the
+ * guest before this existed.
+ *
+ * Note this is NOT how coreutils walks.  du, rm -r, chmod -R, cp -r and find
+ * carry gnulib's fts, which calls openat/opendir through the PLT and has
+ * therefore always worked -- MEASURED: `du -sh /etc` reports the guest's 2.2M,
+ * and a mkdir -p / chmod -R / cp -r / rm -rf round trip is clean.  So the
+ * blast radius here is smaller than it looks; it is the third-party users of
+ * glibc's own walker.
+ *
+ * The saved callback is thread-local and saved/restored around the real call,
+ * which makes a callback that itself calls nftw() work: the inner call's
+ * restore hands the outer one its own callback back. */
+static __thread int (*g_ftw_cb)(const char *, const struct stat *, int);
+static __thread int (*g_nftw_cb)(const char *, const struct stat *, int,
+                                 struct FTW *);
+
+static int ftw_tramp(const char *f, const struct stat *s, int tf)
+{
+    char b[ALR_PBUF];
+    return g_ftw_cb(alr_guest_canon(f, g_root, g_root_len, b, sizeof b), s, tf);
+}
+
+static int nftw_tramp(const char *f, const struct stat *s, int tf,
+                      struct FTW *w)
+{
+    char b[ALR_PBUF];
+    const char *c = alr_guest_canon(f, g_root, g_root_len, b, sizeof b);
+    struct FTW w2 = *w;
+    if (c != f) {
+        /* FTW.base is a byte offset OF THE FILENAME WITHIN fpath, so stripping
+         * the prefix has to move it by the same amount or the callback indexes
+         * into the middle of a component. */
+        w2.base -= (int)(strlen(f) - strlen(c));
+        if (w2.base < 0) w2.base = 0;
+    }
+    return g_nftw_cb(c, s, tf, &w2);
+}
+
+int ftw(const char *dir, int (*fn)(const char *, const struct stat *, int),
+        int nfd)
+{
+    char b[ALR_PBUF];
+    const char *p;
+    int r, (*save)(const char *, const struct stat *, int) = g_ftw_cb;
+
+    ensure_init();
+    if (!real_ftw) { errno = ENOSYS; return -1; }
+    p = rw(dir, b, sizeof b);
+    if (!p && dir) { errno = ENAMETOOLONG; return -1; }
+    /* Unrewritten (a sysdir, or already host-form): the callback would see the
+     * right paths anyway, so skip the trampoline entirely. */
+    if (p == dir) return real_ftw(dir, fn, nfd);
+    g_ftw_cb = fn;
+    r = real_ftw(p, ftw_tramp, nfd);
+    g_ftw_cb = save;
+    return r;
+}
+
+int nftw(const char *dir,
+         int (*fn)(const char *, const struct stat *, int, struct FTW *),
+         int nfd, int flags)
+{
+    char b[ALR_PBUF];
+    const char *p;
+    int r, (*save)(const char *, const struct stat *, int, struct FTW *) = g_nftw_cb;
+
+    ensure_init();
+    if (!real_nftw) { errno = ENOSYS; return -1; }
+    p = rw(dir, b, sizeof b);
+    if (!p && dir) { errno = ENAMETOOLONG; return -1; }
+    if (p == dir) return real_nftw(dir, fn, nfd, flags);
+    g_nftw_cb = fn;
+    r = real_nftw(p, nftw_tramp, nfd, flags);
+    g_nftw_cb = save;
+    return r;
+}
+
+/* struct stat64 == struct stat on LP64, and glibc aliases these itself. */
+int ftw64(const char *dir, int (*fn)(const char *, const struct stat64 *, int),
+          int nfd)
+{ return ftw(dir, (int (*)(const char *, const struct stat *, int))fn, nfd); }
+
+int nftw64(const char *dir,
+           int (*fn)(const char *, const struct stat64 *, int, struct FTW *),
+           int nfd, int flags)
+{ return nftw(dir,
+              (int (*)(const char *, const struct stat *, int, struct FTW *))fn,
+              nfd, flags); }
+
+int inotify_add_watch(int fd, const char *path, uint32_t mask)
+{ P(path); NEED(inotify_add_watch); return real_inotify_add_watch(fd, _p, mask); }
+
+long pathconf(const char *path, int name)
+{
+    char _b[ALR_PBUF];
+    const char *_p = rw(path, _b, sizeof _b);
+    if (!_p && path) { errno = ENAMETOOLONG; return -1; }
+    ensure_init();
+    if (!real_pathconf) { errno = ENOSYS; return -1; }
+    return real_pathconf(_p, name);
+}
 
 int chmod(const char *path, mode_t m) { P(path); NEED(chmod); return real_chmod(_p, m); }
 int fchmodat(int d, const char *path, mode_t m, int f)
@@ -2074,11 +2308,12 @@ static int un_rewrite(const struct sockaddr *addr, socklen_t len,
  * and re-entering, for no gain. */
 static int (*real_accept4)(int, struct sockaddr *, socklen_t *, int);
 
+/* Calls OUR accept4 below, not libc's, so the peer address gets the same
+ * un-rewrite. Within this translation unit the name binds to the definition
+ * here; that is the point. */
 int accept(int fd, struct sockaddr *addr, socklen_t *len)
 {
-    if (!real_accept4) real_accept4 = dlsym(RTLD_NEXT, "accept4");
-    if (!real_accept4) { errno = ENOSYS; return -1; }
-    return real_accept4(fd, addr, len, 0);
+    return accept4(fd, addr, len, 0);
 }
 
 int bind(int fd, const struct sockaddr *addr, socklen_t len)
@@ -2107,6 +2342,84 @@ int connect(int fd, const struct sockaddr *addr, socklen_t len)
     if (!real_connect) { errno = ENOSYS; return -1; }
     return k ? real_connect(fd, (const struct sockaddr *)&un, ul)
              : real_connect(fd, addr, len);
+}
+
+/* ...and the mirror.  Having rewritten sun_path on the way IN, the kernel
+ * hands the rewritten path back on the way OUT, so a guest that asks where it
+ * is bound gets the ANDROID path:
+ *
+ *   MEASURED 2026-08-03, before this existed:
+ *     getsockname returned "/data/data/com.termux/.../ubuntu-24.04/tmp/x.sock"
+ *                  wanted "/tmp/x.sock"
+ *
+ * This is the same leak getcwd() already corrects for the working directory,
+ * and it matters for the same reason: programs print these paths, write them
+ * into lock files and pid files, and hand them to other processes. tmux's
+ * `display-message '#{socket_path}'` and every "server already running at ..."
+ * message are the visible half; a lock file naming a path the guest cannot
+ * open is the ugly half.
+ *
+ * accept()/accept4() fill in the PEER address, which for a unix stream socket
+ * is normally unnamed -- but a client that bound a path before connecting has
+ * one, so they go through the same correction. */
+static void un_unrewrite(struct sockaddr *addr, socklen_t *len)
+{
+    struct sockaddr_un *un = (struct sockaddr_un *)addr;
+    char g[ALR_PBUF];
+    const char *c;
+    size_t n;
+
+    if (!addr || !len || addr->sa_family != AF_UNIX) return;
+    if (*len <= (socklen_t)offsetof(struct sockaddr_un, sun_path)) return;
+    if (un->sun_path[0] == '\0') return;               /* abstract or unnamed */
+
+    /* The kernel may have truncated at the caller's buffer size; make sure we
+     * are looking at a NUL-terminated string before treating it as one. */
+    if (!memchr(un->sun_path, '\0', sizeof un->sun_path)) return;
+
+    c = alr_guest_canon(un->sun_path, g_root, g_root_len, g, sizeof g);
+    if (c == un->sun_path) return;                     /* not under the root */
+
+    /* guest_canon only ever strips the prefix, so this never grows. */
+    n = strlen(c);
+    memmove(un->sun_path, c, n + 1);
+    *len = (socklen_t)(offsetof(struct sockaddr_un, sun_path) + n + 1);
+}
+
+static int (*real_getsockname)(int, struct sockaddr *, socklen_t *);
+static int (*real_getpeername)(int, struct sockaddr *, socklen_t *);
+
+int getsockname(int fd, struct sockaddr *addr, socklen_t *len)
+{
+    int r;
+    ensure_init();
+    if (!real_getsockname) real_getsockname = dlsym(RTLD_NEXT, "getsockname");
+    if (!real_getsockname) { errno = ENOSYS; return -1; }
+    r = real_getsockname(fd, addr, len);
+    if (r == 0) un_unrewrite(addr, len);
+    return r;
+}
+
+int getpeername(int fd, struct sockaddr *addr, socklen_t *len)
+{
+    int r;
+    ensure_init();
+    if (!real_getpeername) real_getpeername = dlsym(RTLD_NEXT, "getpeername");
+    if (!real_getpeername) { errno = ENOSYS; return -1; }
+    r = real_getpeername(fd, addr, len);
+    if (r == 0) un_unrewrite(addr, len);
+    return r;
+}
+
+int accept4(int fd, struct sockaddr *addr, socklen_t *len, int flags)
+{
+    int r;
+    ensure_init();
+    if (!real_accept4) real_accept4 = dlsym(RTLD_NEXT, "accept4");
+    if (!real_accept4) { errno = ENOSYS; return -1; }
+    r = real_accept4(fd, addr, len, flags);
+    if (r >= 0) un_unrewrite(addr, len);
+    return r;
 }
 
 static int rb_connect(void)

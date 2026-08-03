@@ -96,6 +96,11 @@ jobs:
       - name: PTRACE_SYSCALL invariant gate
         run: bash scripts/check-invariants.sh
 
+      # docs/07 §2 states "no status token without a test" and had been broken
+      # three times, once at a scale of 35 orphaned names carrying 32 PASSes.
+      - name: acceptance name gate
+        run: bash scripts/check-acceptance-names.sh
+
       # The scraper once answered node_cold_ms with the exec-throughput number
       # from the next line, and --update wrote it into the baseline as fact.  A
       # regex that matches the wrong thing looks exactly like one that works,
@@ -171,6 +176,15 @@ jobs:
       # read.  Artifact invariants only: everything runtime lives behind a
       # device gate no hosted runner can satisfy, and the gate refuses rather
       # than reporting green on facts it never saw.
+      # bind()/connect() were never interposed at all, so every AF_UNIX address
+      # in the guest resolved against Android.  Nothing could have pointed at
+      # them: the coverage argument was "the ones we thought of".  This diffs
+      # the .so's exports against an inventory of path-taking libc entry points.
+      - name: path coverage gate
+        run: |
+          scripts/build-preload.sh
+          bash scripts/check-path-coverage.sh
+
       - name: regression gate (build-side invariants)
         run: |
           scripts/build-preload.sh

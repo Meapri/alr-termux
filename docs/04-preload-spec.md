@@ -150,6 +150,11 @@ static inline const char *rw(const char *p, char buf[ALR_PBUF])
 
 형식: `ALR_WRAP(반환형, 이름, 시그니처, path_arg_index, flags)`
 
+> **이 표는 기억이 아니라 게이트가 지킨다.** `bind`/`connect` 는 프로젝트 존속 기간 내내 빠져 있었고 아무것도 그걸 가리킬 수 없었다 — 커버리지 근거가 *"우리가 떠올린 것들은 감쌌다"* 였기 때문이다. 그건 근거가 아니라 **누가 무엇을 기억했는지의 목록**이다.
+> `scripts/check-path-coverage.sh` 가 경로 인자를 받는 libc 진입점 목록을 `.so` 의 심볼 테이블과 대조한다. 첫 실행에서 한 번에 나온 것: xattr 8개, `inotify_add_watch`, `pathconf`, `glob`/`glob64`, `ftw`/`ftw64`, `nftw`/`nftw64`, `getsockname`/`getpeername`/`accept4`.
+> 게이트는 심볼이 **export 됐는지**만 증명한다. 재작성이 맞는지는 실기기의 `tests/device/probe_pathcov.c` 만 증명한다. **둘은 한 쌍이고 어느 하나로는 부족하다.**
+> 인터포즈하지 **않는** 항목도 이유와 함께 같은 파일에 적는다. 첫 실행이 저자가 `skip` 으로 추론해 넣은 다섯 개(`setmntent`, `pivot_root`, `name_to_handle_at`, `tmpnam`, `tempnam`)를 전부 반려했다 — 코드는 이미 이유를 갖고 인터포즈하고 있었다.
+
 ### 6.1 open 계열
 `open`, `open64`, `openat`, `openat64`, `creat`, `creat64`, `__open_2`, `__open64_2`, **`__openat_2`**, **`__openat64_2`**, `fopen`, `fopen64`, `freopen`, `freopen64`
 
@@ -174,7 +179,17 @@ static inline const char *rw(const char *p, char buf[ALR_PBUF])
 `unlink`, `unlinkat`, `remove`, `rename`, `renameat`, `renameat2`
 
 ### 6.7 메타데이터
-`chmod`, `fchmodat`, `chown`, `lchown`, `fchownat`, `utime`, `utimes`, `lutimes`, `utimensat`, `truncate`, `truncate64`, `mknod`, `mknodat`, `mkfifo`, `mkfifoat`, `name_to_handle_at`
+`chmod`, `fchmodat`, `chown`, `lchown`, `fchownat`, `utime`, `utimes`, `lutimes`, `utimensat`, `truncate`, `truncate64`, `mknod`, `mknodat`, `mkfifo`, `mkfifoat`, `name_to_handle_at`, `pathconf`
+
+**xattr 계열** (경로 인자 0): `getxattr`, `lgetxattr`, `setxattr`, `lsetxattr`, `listxattr`, `llistxattr`, `removexattr`, `lremovexattr`
+
+> 이미지에 xattr 이 하나도 없으니(§A6) 필요 없어 보이지만, 증상은 xattr 이 아니라 **에러**로 나온다. coreutils 의 `ls` 는 ACL 이 없을 때가 아니라 **ACL 조회가 실패했을 때** 모드 뒤에 `?` 를 찍는다. 재작성 안 된 경로의 `getxattr` 은 맨 ENOENT 다.
+> `MEASURED` 2026-08-03: `drwx------? 6 alr alr … /root` → 수정 후 `drwx------.`
+> 같은 호출이 `cp -a`, `tar --xattrs`, `rsync -X`, `getfacl`, `install -Z` 밑에 있다.
+
+**inotify**: `inotify_add_watch` (경로 인자 1)
+
+> 파일 감시자 전부 — node 의 `fs.watch`/chokidar(즉 **모든 JS 개발 서버**), `inotifywait`, `entr`, watchman. 틀린 경로를 감시하면 **에러가 나지 않고 그냥 영원히 안 터진다.** G5 워크로드에 직접 걸린다.
 
 ### 6.8 exec 계열 — **하나라도 빠지면 그 자식이 죽는다** (§9)
 `execve`, `execveat`, `execv`, `execvp`, `execvpe`, `execl`, `execlp`, `execle`, `fexecve`, `posix_spawn`, `posix_spawnp`, `system`, `popen`
@@ -285,11 +300,43 @@ glibc 2.34+ 는 `files` 백엔드를 libc 에 내장했고, 리터럴 `/etc/pass
 
 의도된 한계: 그룹당 멤버 **64명** 상한(초과 시 `ALR_LOG` 에 기록하고 절단 — 조용한 절단이 아니다), `initgroups()` 미구현(`setgroups` 가 seccomp 로 막혀 애초에 불가능).
 
+**(d) 경로 순회 API** — `glob`, `glob64`, `ftw`, `ftw64`, `nftw`, `nftw64`
+
+`glob()` 은 자기 **내부** `opendir`/`lstat` 로 패턴을 걷는다. PLT 를 거치지 않으므로 `LD_PRELOAD` 가 못 본다.
+> `MEASURED` 2026-08-03: 게스트에서 `glob("/etc/os-relea*")` → `GLOB_NOMATCH`. Android 의 `/etc` 를 뒤졌다.
+
+**패턴만 재작성해서는 안 된다.** `glob()` 은 결과를 *패턴의 리터럴 접두사 + 디렉토리 엔트리*로 조립하므로, 패턴을 재작성하면 `<R>` 접두사가 붙은 경로 — **게스트가 이름 붙일 수 없는 주소의 올바른 매치** — 를 돌려준다. 모든 결과를 `guest_canon` 으로 되돌린다. 이게 `GLOB_NOCHECK`(매치 없으면 패턴 자체를 반환)와 `GLOB_APPEND`(이미 게스트 형식인 항목은 그대로 두므로 멱등) 도 함께 덮는다.
+
+`GLOB_ALTDIRFUNC` 는 손대지 않고 통과시킨다 — 호출자가 자기 `opendir`/`lstat` 을 준 것이라 glibc 가 만드는 경로는 커널이 아니라 **그쪽 코드로** 간다.
+
+`ftw`/`nftw` 는 여기에 하나가 더 붙는다: **콜백이** 각 경로를 받는다. 스레드 로컬에 사용자 콜백을 저장하고 트램폴린을 넘겨 `guest_canon` 을 거친 경로를 전달한다. `struct FTW.base` 는 `fpath` **안의 바이트 오프셋**이라 잘려나간 만큼 같이 옮겨야 한다. 저장/복원을 실제 호출 바깥에 두므로 콜백이 다시 `nftw()` 를 불러도 동작한다.
+
+**알려진 한계**: `GLOB_TILDE`. glibc 가 우리 재작성 *뒤에* `~` 를 내부에서 전개하고 같은 내부 호출로 걷는다. 쫓을 가치가 없다 — 틸드를 쓰는 셸은 호출 전에 자기가 전개한다.
+
+**coreutils 는 여기 해당 없다.** `du`, `rm -r`, `chmod -R`, `cp -r`, `find` 는 gnulib 의 `fts` 를 들고 다니고 그건 PLT 를 거친다.
+> `MEASURED`: `du -sh /etc` 가 게스트의 2.2M 을 보고하고, mkdir -p / chmod -R / cp -r / rm -rf 왕복이 깨끗하다.
+
 **(c) audit 소켓** — `socket`
 
 `socket(AF_NETLINK, *, NETLINK_AUDIT)` 를 **`EPROTONOSUPPORT`** 로 응답한다. shadow 의 `audit_help_open()` 은 `EINVAL`/`EPROTONOSUPPORT`/`EAFNOSUPPORT` 만 "커널에 audit 없음" 으로 보고 계속 진행하고, 그 외 errno 는 하드 에러로 취급해 즉시 종료한다. Android 는 SELinux 로 `EACCES`/`EPERM` 를 주므로 보정이 필요하다. 다른 도메인·프로토콜은 그대로 통과시킨다.
 
 없으면: `Cannot open audit interface - aborting.`
+
+### 6.18 AF_UNIX 소켓 주소 — **모든 게스트 서버**
+
+`bind`, `connect` (들어가는 쪽) / `getsockname`, `getpeername`, `accept`, `accept4` (나오는 쪽)
+
+`sockaddr_un.sun_path` 는 **경로다.** 프로젝트 존속 기간 내내 아무도 인터포즈하지 않았고, 그래서 게스트가 `bind("/tmp/tmux-10297/default")` 하면 **Android 쪽** 경로에 붙었다. tmux 가 눈에 보이는 피해자였다 — 디렉토리를 만들고 게스트에서 보이는 것까지 확인해도 실패했다. **디렉토리는 재작성되고 주소는 안 됐기 때문이다.** 부류는 훨씬 넓다: dbus, gpg-agent, ssh-agent, X11, `/var/run/<db>/.s.*` 아래 모든 DB.
+
+**들어가는 쪽에서 절대 하면 안 되는 두 가지**
+- **추상 소켓 재작성 금지.** `sun_path[0] == '\0'` 는 파일시스템에 존재하지 않는 Linux 추상 네임스페이스다. 접두사를 붙이면 **다른 주소를 발명하는 것**이고, `"\0alr-probe"` 로 합의한 두 프로세스가 서로를 못 찾게 된다.
+- **절단 금지.** `sun_path` 는 108바이트고 루트 접두사가 그중 ~57바이트다. 안 들어가면 `ENAMETOOLONG` 으로 실패해야 한다 — 조용히 잘린 주소는 **틀린 경로의 소켓**이 되어 반쯤 동작한다.
+
+**나오는 쪽**은 `getcwd` 와 같은 이유로 되돌린다. 커널이 재작성된 `sun_path` 를 그대로 돌려주므로, 자기가 어디 묶였는지 묻는 게스트는 Android 경로를 배운다.
+> `MEASURED` 2026-08-03: `getsockname` → `/data/data/com.termux/.../tmp/x.sock`, 원하는 값 `/tmp/x.sock`
+> 프로그램은 이 경로를 **출력하고, 락 파일과 pid 파일에 쓰고, 다른 프로세스에 넘긴다.**
+
+`accept(2)` 자체가 zygote 필터에 막혀 있다는 것은 별개의 사실이다 — [§A6](01-platform-facts.md) 참조. preload 가 `accept4(f,a,l,0)` 로 구현한다.
 
 ## 7. `/proc` 가상화
 

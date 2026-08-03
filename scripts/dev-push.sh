@@ -163,7 +163,13 @@ doctor)
     "${SSH[@]}" "cd ~/$REMOTE && clang -O1 -o alr-doctor src/cli/doctor.c && ./alr-doctor"
     ;;
 shell)
-    exec "${SSH[@]}"
+    # With no argument this is an interactive login.  With one it runs that
+    # command -- without which `dev-push.sh shell 'some command'` SILENTLY
+    # dropped the command and opened a shell that read EOF and exited 0.  A
+    # harness that exits 0 having run nothing is the worst kind.
+    shift
+    if [ "$#" -eq 0 ]; then exec "${SSH[@]}"; fi
+    exec "${SSH[@]}" "$*"
     ;;
 *)
     echo "usage: $0 {test|supervisor|preload|alr|accept|bench|doctor|shell}" >&2; exit 1;;

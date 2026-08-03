@@ -183,7 +183,18 @@ ALR NPM CI:                        미측정 — 손으로만 쟀다([M12 §4](e
 ALR CODEX VERSION:                PASS   ← "바이너리가 뜬다"는 뜻뿐이다. 아래 주석
 ALR CODEX LINKAGE:                KNOWN_FAIL:static-unhooked
 ALR PTY TMUX:                     PASS
+PRELOAD UNIX SOCKET PATH:         PASS   ← bind/connect 재작성 + 추상 소켓 통과 (대조)
+PRELOAD PATH COVERAGE:            PASS   ← xattr/inotify/pathconf/getsockname/nftw/setmntent/glob
+CLI GUEST USERDB:                 PASS   ← whoami → alr
+CLI GUEST USERDB LS:              PASS   ← ls -ld /root → "alr alr" (이전: "10297 10297")
 ```
+
+> **`PRELOAD PATH COVERAGE` 가 재는 것.** 일곱 개 중 여섯은 양성이고 하나는 **음성 대조**다.
+> `glob-guest` 는 `glob()` 이 **게스트 경로**를 돌려주는지 본다 — 결과를 되돌리지 않는 "꼼꼼하게 다
+> 감싸자" 식 변경이 모든 호출자를 깨뜨리는데, 그걸 잡는 검사다.
+> 모든 검사는 **Android 에 없는 경로**를 쓴다. 첫 판본은 `/etc` 를 감시하고 `/etc` 를 `pathconf` 했는데
+> Android 에 `/etc` 가 있어서(`/system/etc` 심링크) **틀린 디렉토리를 보면서 둘 다 ok 를 보고했다.**
+> 이틀 사이 두 번째 유령 통과다 — 첫 번째는 `connect()` 에서 멈춰 `accept(2)` 가 막힌 것을 놓쳤다.
 
 > **`ALR CODEX VERSION: PASS`가 뜻하지 않는 것.** codex 0.146.0은 **정적 링크 musl 바이너리**다
 > (`ET_EXEC`, `INTERP` 없음, `NEEDED` 없음, 269 MB). `LD_PRELOAD`가 원리적으로 닿지 않아 preload 가
@@ -206,17 +217,24 @@ ALR PTY TMUX:                     PASS
 > 쓴 그 파일을 codex 가 읽기는 하는지조차 확인되지 않았다.** 이걸 판정하려면 게스트 안에서 codex 의
 > 유효 설정을 되읽는 검사가 필요하다. 검사가 없는 이름에 `PASS`를 적지 않는다.
 >
-> **`ALR PTY TMUX`는 `PENDING_DEVICE`로 남긴다 — 남은 것이 무엇인지는 좁혀졌다.**
-> 검증된 것: `tmux -V` → `tmux 3.4`(폭 검사, [M11 §4](evidence/2026-08-02-m11-breadth.md)에서
-> `LOCPATH`로 UTF-8 로케일을 살린 뒤), 그리고 게스트가 `/dev/ptmx`로 직접 연 페어의 **ioctl 집합
-> 실측**([M14 §1](evidence/2026-08-03-m14-ioctl-php.md)) — `TCGETS` `TCSETS` `TIOCGWINSZ`
-> `TIOCSWINSZ` `FIONREAD` `TIOCOUTQ`는 그냥 허용이고, 거부되던 `TCGETS2` `TIOCGSID` `TIOCGETD`
-> `TIOCEXCL`은 번역으로 통과, `TIOCSTI`만 의도적으로 `EACCES`다. **미검증인 것: 실제 tmux 세션.**
-> 지금까지의 디바이스 세션이 전부 비대화형이었고 거기서는 `/dev/tty`가 `ENXIO`라
-> ([device-bringup](evidence/2026-08-02-device-bringup.md)), 대화형 경로를 밟은 적이 없다.
-> **판정 방법**: 실제 Termux 터미널 세션에서 `alr run tmux new -s t`로 붙어 창 분할·리사이즈까지
-> 해 보고 `/dev/tty` 가용성을 함께 기록한다. **막는 것**: 사람이 앉은 터미널 세션(현재 자동화가
-> 쓰는 비대화형 경로로는 재현되지 않는다).
+> **`ALR PTY TMUX`는 `PASS` 다 — 그런데 PTY 문제가 아니었다.**
+> 이 이름은 *"지금까지의 디바이스 세션이 전부 비대화형이었고 `/dev/tty` 가 `ENXIO` 라 대화형 경로를
+> 밟은 적이 없다"* 는 사유로 `PENDING_DEVICE` 였다. 러너를 쓰려고 붙어 보니 **사람이 앉은 터미널이
+> 필요 없었다.** tmux 서버는 소켓 버그 **둘**로 죽고 있었다:
+> `bind()`/`connect()` 가 인터포즈되지 않아 `sun_path` 가 재작성되지 않았고([§6.18](04-preload-spec.md)),
+> `accept(2)` 는 zygote 필터에 막혀 `-ENOSYS` 로 에뮬레이션되고 있었다([§A6](01-platform-facts.md)).
+> **연결을 받는 모든 게스트 프로그램이 깨져 있었다.** 둘 다 고친 뒤 `a1: 1 windows (created …)`.
+>
+> 서버와 조회를 **한 번의 `alr run` 안에** 넣는다 — `PTRACE_O_EXITKILL` 때문에 데몬화하는
+> 프로세스가 자기를 띄운 호출보다 오래 살 수 없다([ADR 0001](adr/0001-signal-only-ptrace-supervisor.md)).
+> 설계대로다. 대화형에서는 서버가 자기를 소유한 `alr shell` 만큼 산다.
+>
+> 이전에 실측된 것은 그대로 유효하다: `tmux -V` → `tmux 3.4`([M11 §4](evidence/2026-08-02-m11-breadth.md)),
+> `/dev/ptmx` 페어의 ioctl 집합([M14 §1](evidence/2026-08-03-m14-ioctl-php.md)) — `TCGETS` `TCSETS`
+> `TIOCGWINSZ` `TIOCSWINSZ` `FIONREAD` `TIOCOUTQ` 는 그냥 허용, `TCGETS2` `TIOCGSID` `TIOCGETD`
+> `TIOCEXCL` 은 번역으로 통과, `TIOCSTI` 만 의도적으로 `EACCES`.
+> **여전히 미측정**: 사람이 앉은 대화형 세션에서의 창 분할·리사이즈. 자동화가 판정할 수 있는
+> 부분은 판정했고, 남은 것에는 상태 토큰을 붙이지 않는다.
 
 ### M8 — 성능
 ```

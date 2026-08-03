@@ -91,9 +91,23 @@ force-unsafe-io
 
 `<R>/etc/passwd`, `<R>/etc/group`에 Termux UID/GID 줄 **추가** (덮어쓰기 아님):
 ```
-alr:x:<uid>:<gid>:alr:/root:/bin/bash
+/etc/passwd:  alr:x:<uid>:<gid>:alr:/root:/bin/bash
+/etc/group:   alr:x:<gid>:
 ```
-게스트의 `ls -l`, `getpwuid()`가 해석되게.
+> 두 파일의 형식이 다르다. group 은 `name:passwd:gid:members` 4필드다 — 이 문서는 2026-08-03 까지 양쪽에 passwd 형식 한 줄만 적어 뒀었고, 그대로 구현했으면 게스트의 모든 `getgrgid()` 앞에 망가진 레코드를 놓을 뻔했다.
+
+게스트의 `ls -l`, `getpwuid()`가 해석되게. **구현 전 실측** (2026-08-03):
+```
+$ alr run ls -ld /root
+drwx------ 6 10297 10297 3452 Aug  3 10:25 /root
+$ alr run --no-fakeroot whoami
+whoami: cannot find name for user ID 10297
+```
+rootfs 안의 모든 파일이 디스크상으로는 Termux uid 소유인데 이미지의 어떤 항목도 그 uid 를 설명하지 않는다. **fakeroot 여부와 무관하다** — fakeroot 는 프로세스 자격증명(`getuid`)을 속이지 지 `st_uid` 를 바꾸지 않는다.
+
+**덮어쓰기가 아니라 추가여야 하는 이유**: 이미지의 root/daemon/nobody 항목과 apt 가 패키지 설치 중 만드는 모든 uid 가 이 파일에 산다.
+
+**있으면 넘어가기가 아니라 매번 다시 쓰는 이유**: uid 는 불변이 아니다. Termux 백업을 새 설치에 복원하면 데이터 디렉토리는 그대로인데 uid 는 새로 배정된다. 그래서 `alr install` 뿐 아니라 `alr update-components` 도 이걸 다시 쓴다 — 자기 줄만 지우고 다시 붙이므로 멱등이다.
 
 ### 3.3 절대 건드리지 말 것
 
