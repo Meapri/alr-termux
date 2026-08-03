@@ -87,7 +87,7 @@
 - **x86 에뮬레이션** (box64/FEX). 네이티브 arm64만.
 - **systemd / init / 서비스 관리.**
 - **setuid 의미론.** `/data`는 `nosuid`이며 setuid/setgid는 seccomp로 막혀 있다. `sudo`류는 동작하지 않는다.
-- **Go로 컴파일된 게스트 바이너리의 완전 지원.** Go는 libc를 우회해 raw `svc`를 발행하므로 `LD_PRELOAD` 인터포저가 잡지 못한다. `alr doctor`가 경고하고 문서로 명시한다.
+- **libc를 우회해 raw `svc`를 발행하는 게스트 바이너리.** Go가 대표적이고, **Ubuntu 26.04가 기본 coreutils로 채택한 uutils(Rust)도 여기 해당한다**(74개 inline `svc` 확인). `LD_PRELOAD` 인터포저는 libc를 거치는 호출만 볼 수 있으므로 원리적으로 불가능하다 — syscall마다 ptrace를 거는 PRoot 모델로 돌아가야 잡히는데, 그 비용을 내지 않는 것이 이 프로젝트의 목적이다([ADR 0001](adr/0001-signal-only-ptrace-supervisor.md)). 따라서 **Ubuntu 26.04는 v1 대상이 아니다**: 나머지는 다 동작하지만 coreutils가 통째로 못 쓴다. `alr install`이 경고한다.
 - **`/dev/full` 에뮬레이션.** 서빙하려면 프로세스에서 가장 뜨거운 syscall 인 `write()` 를 인터포즈해야 하는데 대상 워크로드 중 쓰는 것이 없고, 빠뜨린 stdio 심볼은 전부 **조용히 성공한 쓰기**가 된다 — 열거 가능하고 요란하게 실패하는 다른 인터포지션과 성격이 다르다. 근거는 [RISKS](RISKS.md).
 
 ## 6. 정직성 규칙 (프로젝트 헌장)

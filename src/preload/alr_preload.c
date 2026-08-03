@@ -512,6 +512,30 @@ static const char *synth_cmdline(void)
 
 #ifdef ALR_TRACE_AUXV
 #include <sys/auxv.h>
+#include <link.h>
+
+/* dl_iterate_phdr is the last untested channel: uutils imports it, and its
+ * NEEDED list carries ld-linux-aarch64.so.1 itself, so the loader appears in
+ * the link map as an ordinary object. */
+static int trace_cb(struct dl_phdr_info *i, size_t sz, void *d)
+{
+    (void)sz;
+    lg("alr trace phdr: name=%s\n", (i->dlpi_name && *i->dlpi_name)
+       ? i->dlpi_name : "(main/empty)");
+    return ((int (*)(struct dl_phdr_info *, size_t, void *))
+            ((void **)d)[0])(i, sz, ((void **)d)[1]);
+}
+
+int dl_iterate_phdr(int (*cb)(struct dl_phdr_info *, size_t, void *), void *data)
+{
+    static int (*real_dip)(int (*)(struct dl_phdr_info *, size_t, void *), void *);
+    void *pair[2];
+    if (!real_dip) real_dip = dlsym(RTLD_NEXT, "dl_iterate_phdr");
+    if (!real_dip) { errno = ENOSYS; return -1; }
+    lg("alr trace phdr: dl_iterate_phdr called\n");
+    pair[0] = (void *)cb; pair[1] = data;
+    return real_dip(trace_cb, pair);
+}
 
 /* What argv does the failing process ACTUALLY receive?  Everything else has
  * been excluded by measurement (no /proc access, auxv only HWCAP), so this is
@@ -1161,6 +1185,11 @@ long syscall(long nr, ...)
         }
         if (used >= 2) break;
     }
+#ifdef ALR_TRACE_AUXV
+    if (m) lg("alr trace syscall: nr=%ld path=%s\n", nr,
+              a[0] ? (const char *)a[0] : "(0)");
+    else   lg("alr trace syscall: nr=%ld\n", nr);
+#endif
     if (!real_syscall) { errno = ENOSYS; return -1; }
     return real_syscall(nr, a[0], a[1], a[2], a[3], a[4], a[5]);
 }

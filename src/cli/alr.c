@@ -741,9 +741,14 @@ static int cmd_install(const char *distro, const char *url_override)
          * rootfs look fine until the first `ls`. */
         if (strcmp(distro, "ubuntu-24.04") != 0)
             fprintf(stderr,
-                "alr: WARNING %s is not a v1 target.  Everything except the\n"
-                "     uutils coreutils family is expected to work; ls/cat/echo\n"
-                "     and friends will fail.  See docs/RISKS.md.\n", distro);
+                "alr: WARNING %s is not a v1 target.\n"
+                "     Ubuntu 26.04 replaced GNU coreutils with uutils, a Rust\n"
+                "     multicall binary that issues raw syscalls inline instead of\n"
+                "     calling libc.  LD_PRELOAD cannot see those, so ls/cat/echo\n"
+                "     and the rest of coreutils CANNOT work here -- this is the\n"
+                "     same limit documented for Go binaries, not a bug to fix.\n"
+                "     Everything else (bash, apt, dpkg, grep, sed, awk, tar) does\n"
+                "     work.  See docs/RISKS.md.\n", distro);
         printf("alr: resolving the current ubuntu-base image for %s\n", distro + 7);
         if (discover_ubuntu(distro + 7, durl, sizeof durl, dsha, sizeof dsha) != 0) {
             /* Offline / air-gapped fallback.  Say plainly that the download is

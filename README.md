@@ -118,7 +118,7 @@ PRoot와 갈리는 불변식**이고, 이 줄이 그것을 실행마다 확인�
 | `/dev/full` 미에뮬레이션 | **의도된 영구 비목표.** 고칠 계획이 없다 (유일한 `KNOWN_FAIL`) |
 | `php-cli` | 출하 빌드에서 **동작하지만 원인은 규명되지 않았다** — 아래 |
 | `codex` | 정적 musl 바이너리라 `LD_PRELOAD` 가 닿지 않는다. 실행은 되나 경로 가상화가 없다 |
-| Ubuntu 26.04 rootfs | **부팅한다.** uutils coreutils 계열만 실패하고 원인은 미규명. v1 대상은 24.04 뿐이고 설치 시 경고한다 |
+| Ubuntu 26.04 rootfs | 부팅하고 `bash`/`apt`/`grep`/`sed`/`awk`/`tar` 등은 동작하지만, 26.04가 기본 coreutils로 채택한 **uutils는 원리적으로 지원 불가** — libc를 우회해 raw `svc`를 발행하므로 `LD_PRELOAD`가 볼 수 없다. Go 바이너리와 같은 한계 |
 
 **`/dev/full`** 을 서빙하려면 프로세스에서 가장 뜨거운 syscall인 `write()`를 인터포즈해야 하는데, 대상 워크로드 중
 이 디바이스 노드를 쓰는 것이 없다. 게다가 실패 표면이 열려 있어서(`puts`/`putchar`/`fwrite_unlocked`/`dprintf`/…)
